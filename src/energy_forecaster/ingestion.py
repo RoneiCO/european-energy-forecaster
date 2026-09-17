@@ -8,13 +8,10 @@ import requests
 from dotenv import load_dotenv
 from entsoe.entsoe import EntsoePandasClient
 from entsoe.exceptions import NoMatchingDataError
-from typing import TypeVar
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
-
-T = TypeVar("T", pd.Series, pd.DataFrame)
 
 NORDIC_ZONES = {
     "SE_1": "Sweden (Luleå)",
@@ -30,6 +27,7 @@ NORDIC_ZONES = {
     "DK_2": "Denmark (East)",
     "FI": "Finland",
 }
+
 
 def get_client() -> EntsoePandasClient:
     """Create an ENTSO-E client using the API key from the environment.
@@ -65,7 +63,7 @@ def fetch_day_ahead_prices(zone_code: str, start: pd.Timestamp, end: pd.Timestam
     """
     client = get_client()
     prices = client.query_day_ahead_prices(zone_code, start=start, end=end)
-    return prices.resample("1h").mean() # standardize to hourly resolution.
+    return prices.resample("1h").mean()  # standardize to hourly resolution.
 
 
 def fetch_all_zone_prices(
@@ -166,7 +164,7 @@ def fetch_all_zone_generation(
     tech_cols = [
         c for c in combined.columns if c not in ("timestamp", "zone", "zone_name", "country")
     ]
-    combined[tech_cols] = combined[tech_cols].fillna(0) # Fill missing generation types with 0 MW
+    combined[tech_cols] = combined[tech_cols].fillna(0)  # Fill missing generation types with 0 MW
     return combined
 
 
@@ -198,7 +196,11 @@ def fetch_generation_mix(
     start: pd.Timestamp,
     end: pd.Timestamp,
 ) -> pd.DataFrame:
-    """Fetch electricity generation mix for a bidding zone, resampled to hourly.
+    """Fetch hourly generation by source (MW), keeping only power delivered to the grid.
+
+    Drops the "Actual Consumption" subtype (pumped-storage charging draw) — out of
+    scope for a generation-mix feature. Net storage behavior could be a useful
+    feature later, but isn't needed for now.
 
     Args:
         zone_code: ENTSO-E bidding zone code, e.g. "SE_4"
@@ -213,15 +215,26 @@ def fetch_generation_mix(
         KeyError: If ENTSOE_API_KEY is not set in the environment.
     """
     client = get_client()
+
     generation = client.query_generation(zone_code, start=start, end=end)
     # entsoe-py sometimes labels columns with two levels (e.g., the generation type, and whether it's "Actual Aggregated" output vs. "Actual Consumption"
     # For now, we will just take the first level of the column names to simplify the DataFrame.
+
     if isinstance(generation.columns, pd.MultiIndex):
+        generation = generation.loc[
+            :, generation.columns.get_level_values(1) == "Actual Aggregated"
+        ]
         generation.columns = generation.columns.get_level_values(0)
+
+    # Check for duplicate columns after flattening the MultiIndex. If duplicates exist, raise an error to avoid silent data corruption.
+    if generation.columns.duplicated().any():
+        dupes = generation.columns[generation.columns.duplicated()].unique().tolist()
+        raise ValueError(f"Duplicate generation columns for {zone_code}: {dupes}")
+
     return generation.resample("1h").mean()
 
 
-def _fetch_with_retry(
+def _fetch_with_retry[T: (pd.Series, pd.DataFrame)](
     fetch_fn: Callable[[str, pd.Timestamp, pd.Timestamp], T],
     zone_code: str,
     start: pd.Timestamp,
@@ -238,20 +251,3 @@ def _fetch_with_retry(
                 time.sleep(2**attempt)
     logger.error("Giving up on %s after %d attempts", zone_code, max_retries)
     return None
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    start = pd.Timestamp("2026-09-01", tz="Europe/Stockholm")
-    end = pd.Timestamp("2026-09-04", tz="Europe/Stockholm")
-
-    all_prices = fetch_all_zone_prices(NORDIC_ZONES, start, end)
-    print(all_prices.head())
-    print(all_prices["zone"].value_counts())
-
-    load = fetch_load("SE_4", start, end)
-    print(load.head())
-
-    generation = fetch_generation_mix("SE_4", start, end)
-    print(generation.head())
-    print(generation.columns.tolist())
