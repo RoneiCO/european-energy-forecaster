@@ -220,16 +220,8 @@ def fetch_generation_mix(
     # entsoe-py sometimes labels columns with two levels (e.g., the generation type, and whether it's "Actual Aggregated" output vs. "Actual Consumption"
     # For now, we will just take the first level of the column names to simplify the DataFrame.
 
-    if isinstance(generation.columns, pd.MultiIndex):
-        generation = generation.loc[
-            :, generation.columns.get_level_values(1) == "Actual Aggregated"
-        ]
-        generation.columns = generation.columns.get_level_values(0)
-
-    # Check for duplicate columns after flattening the MultiIndex. If duplicates exist, raise an error to avoid silent data corruption.
-    if generation.columns.duplicated().any():
-        dupes = generation.columns[generation.columns.duplicated()].unique().tolist()
-        raise ValueError(f"Duplicate generation columns for {zone_code}: {dupes}")
+    generation = _flatten_generation_columns(generation)
+    generation = _coalesce_duplicate_columns(generation)
 
     return generation.resample("1h").mean()
 
@@ -265,3 +257,50 @@ def _normalize_timestamp_column(df: pd.DataFrame) -> pd.DataFrame:
     """
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True).dt.tz_convert("Europe/Stockholm")
     return df
+
+
+def _flatten_generation_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize generation columns to plain technology names.
+
+    entsoe-py sometimes returns combined (technology, subtype) column labels as a
+    true pandas MultiIndex, and sometimes as a flat Index whose individual elements
+    are tuples -- inconsistently, depending on the zone and which technologies it
+    reports. Checking `isinstance(col, tuple)` per column catches both shapes;
+    checking `isinstance(df.columns, pd.MultiIndex)` only catches the first one.
+    Keeps only "Actual Aggregated" (power delivered to the grid), dropping
+    "Actual Consumption" (e.g. pumped-storage charging draw).
+    """
+    keep_cols, new_names = [], []
+    for col in df.columns:
+        if isinstance(col, tuple):
+            technology, subtype = col
+            if subtype == "Actual Aggregated":
+                keep_cols.append(col)
+                new_names.append(technology)
+        else:
+            keep_cols.append(col)
+            new_names.append(col)
+    df = df[keep_cols]
+    df.columns = new_names
+    return df
+
+
+def _coalesce_duplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Collapse duplicate-named columns into one, keeping the first non-null value per row.
+
+    entsoe-py sometimes reports the same technology under two parallel column
+    representations (e.g. a bare "Biomass" and a tupled ("Biomass", "Actual
+    Aggregated")) for the same zone/year, with only one of the two ever actually
+    populated. Raises if both versions are ever non-null on the same row, since
+    that would mean the two sources genuinely disagree -- a real conflict, not a
+    safe-to-merge duplicate.
+    """
+    if not df.columns.duplicated().any():
+        return df
+
+    for name in df.columns[df.columns.duplicated()].unique():
+        subset = df.loc[:, df.columns == name]
+        if (subset.notna().sum(axis=1) > 1).any():
+            raise ValueError(f"Conflicting non-null values across duplicate '{name}' columns")
+
+    return df.T.groupby(level=0).first().T
