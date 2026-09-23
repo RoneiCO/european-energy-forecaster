@@ -19,7 +19,8 @@ RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
 def pull_and_cache_year(data_type: str, fetch_fn, zones: dict[str, str], year: int) -> None:
     """Fetch one calendar year of data for all zones and cache it as Parquet, unless already cached."""
     out_path = RAW_DATA_DIR / data_type / f"year={year}.parquet"  # One file per data type per year.
-    if out_path.exists():
+    current_year = pd.Timestamp.now().year
+    if out_path.exists() and year < current_year:
         logger.info("Skipping %s %d, already cached at %s", data_type, year, out_path)
         return
 
@@ -29,7 +30,8 @@ def pull_and_cache_year(data_type: str, fetch_fn, zones: dict[str, str], year: i
 
     logger.info("Fetching %s for %d...", data_type, year)
     df = fetch_fn(zones, start, end)
-
+    df = df[df["timestamp"].dt.year == year]
+    
     out_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(out_path, index=False)
     logger.info("Saved %d rows to %s", len(df), out_path)

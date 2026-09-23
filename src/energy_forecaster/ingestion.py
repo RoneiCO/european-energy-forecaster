@@ -97,7 +97,7 @@ def fetch_all_zone_prices(
         zone_df["zone_name"] = zone_name
         zone_df["country"] = zone_code.split("_")[0]
         frames.append(zone_df)
-    return pd.concat(frames).reset_index(names="timestamp")
+    return _normalize_timestamp_column(pd.concat(frames).reset_index(names="timestamp"))
 
 
 def fetch_all_zone_load(
@@ -128,7 +128,7 @@ def fetch_all_zone_load(
         zone_df["zone_name"] = zone_name
         zone_df["country"] = zone_code.split("_")[0]
         frames.append(zone_df)
-    return pd.concat(frames).reset_index(names="timestamp")
+    return _normalize_timestamp_column(pd.concat(frames).reset_index(names="timestamp"))
 
 
 def fetch_all_zone_generation(
@@ -165,7 +165,7 @@ def fetch_all_zone_generation(
         c for c in combined.columns if c not in ("timestamp", "zone", "zone_name", "country")
     ]
     combined[tech_cols] = combined[tech_cols].fillna(0)  # Fill missing generation types with 0 MW
-    return combined
+    return _normalize_timestamp_column(combined)
 
 
 def fetch_load(
@@ -251,3 +251,16 @@ def _fetch_with_retry[T: (pd.Series, pd.DataFrame)](
                 time.sleep(2**attempt)
     logger.error("Giving up on %s after %d attempts", zone_code, max_retries)
     return None
+
+def _normalize_timestamp_column(df: pd.DataFrame) -> pd.DataFrame:
+    """Coerce the timestamp column to one consistent timezone-aware dtype.
+
+    entsoe-py returns timestamps as a fixed UTC offset that changes across
+    DST transitions (+01:00 in winter, +02:00 in summer for Stockholm). A
+    column spanning both can't be stored as a uniform datetime64[ns, tz]
+    dtype and silently degrades to `object` dtype instead, breaking `.dt`
+    accessors. Parsing with utc=True first forces one representation; then
+    tz_convert restores local Stockholm time for correct calendar semantics.
+    """
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True).dt.tz_convert("Europe/Stockholm")
+    return df
