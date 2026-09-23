@@ -31,7 +31,7 @@ def pull_and_cache_year(data_type: str, fetch_fn, zones: dict[str, str], year: i
     logger.info("Fetching %s for %d...", data_type, year)
     df = fetch_fn(zones, start, end)
     df = df[df["timestamp"].dt.year == year]
-    
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(out_path, index=False)
     logger.info("Saved %d rows to %s", len(df), out_path)

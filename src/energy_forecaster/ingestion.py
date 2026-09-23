@@ -252,6 +252,7 @@ def _fetch_with_retry[T: (pd.Series, pd.DataFrame)](
     logger.error("Giving up on %s after %d attempts", zone_code, max_retries)
     return None
 
+
 def _normalize_timestamp_column(df: pd.DataFrame) -> pd.DataFrame:
     """Coerce the timestamp column to one consistent timezone-aware dtype.
 
