@@ -9,24 +9,11 @@ from dotenv import load_dotenv
 from entsoe.entsoe import EntsoePandasClient
 from entsoe.exceptions import NoMatchingDataError
 
+from energy_forecaster.config import Zone
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
-
-NORDIC_ZONES = {
-    "SE_1": "Sweden (Luleå)",
-    "SE_2": "Sweden (Sundsvall)",
-    "SE_3": "Sweden (Stockholm)",
-    "SE_4": "Sweden (Malmö)",
-    "NO_1": "Norway (Oslo)",
-    "NO_2": "Norway (Kristiansand)",
-    "NO_3": "Norway (Trondheim)",
-    "NO_4": "Norway (Tromsø)",
-    "NO_5": "Norway (Bergen)",
-    "DK_1": "Denmark (West)",
-    "DK_2": "Denmark (East)",
-    "FI": "Finland",
-}
 
 
 def get_client() -> EntsoePandasClient:
@@ -67,7 +54,7 @@ def fetch_day_ahead_prices(zone_code: str, start: pd.Timestamp, end: pd.Timestam
 
 
 def fetch_all_zone_prices(
-    zones: dict[str, str],
+    zones: dict[str, Zone],
     start: pd.Timestamp,
     end: pd.Timestamp,
     max_retries: int = 3,
@@ -88,20 +75,20 @@ def fetch_all_zone_prices(
         KeyError: If ENTSOE_API_KEY is not set in the environment.
     """
     frames = []
-    for zone_code, zone_name in zones.items():
+    for zone_code, zone in zones.items():
         prices = _fetch_with_retry(fetch_day_ahead_prices, zone_code, start, end, max_retries)
         if prices is None:
             continue
         zone_df = prices.rename("price_eur_mwh").to_frame()
         zone_df["zone"] = zone_code
-        zone_df["zone_name"] = zone_name
-        zone_df["country"] = zone_code.split("_")[0]
+        zone_df["zone_name"] = zone.name
+        zone_df["country"] = zone.country
         frames.append(zone_df)
     return _normalize_timestamp_column(pd.concat(frames).reset_index(names="timestamp"))
 
 
 def fetch_all_zone_load(
-    zones: dict[str, str], start: pd.Timestamp, end: pd.Timestamp, max_retries: int = 3
+    zones: dict[str, Zone], start: pd.Timestamp, end: pd.Timestamp, max_retries: int = 3
 ) -> pd.DataFrame:
     """Fetch hourly load (demand) for every zone in `zones`, concatenated into one table.
 
@@ -119,20 +106,20 @@ def fetch_all_zone_load(
     """
 
     frames = []
-    for zone_code, zone_name in zones.items():
+    for zone_code, zone in zones.items():
         load = _fetch_with_retry(fetch_load, zone_code, start, end, max_retries)
         if load is None:
             continue
         zone_df = load.rename("load_mw").to_frame()
         zone_df["zone"] = zone_code
-        zone_df["zone_name"] = zone_name
-        zone_df["country"] = zone_code.split("_")[0]
+        zone_df["zone_name"] = zone.name
+        zone_df["country"] = zone.country
         frames.append(zone_df)
     return _normalize_timestamp_column(pd.concat(frames).reset_index(names="timestamp"))
 
 
 def fetch_all_zone_generation(
-    zones: dict[str, str], start: pd.Timestamp, end: pd.Timestamp, max_retries: int = 3
+    zones: dict[str, Zone], start: pd.Timestamp, end: pd.Timestamp, max_retries: int = 3
 ) -> pd.DataFrame:
     """Fetch hourly generation by source for every zone, concatenated with missing techs as 0.
 
@@ -150,14 +137,14 @@ def fetch_all_zone_generation(
         KeyError: If ENTSOE_API_KEY is not set in the environment.
     """
     frames = []
-    for zone_code, zone_name in zones.items():
+    for zone_code, zone in zones.items():
         generation = _fetch_with_retry(fetch_generation_mix, zone_code, start, end, max_retries)
         if generation is None:
             continue
         generation = generation.rename_axis("timestamp").reset_index()
         generation["zone"] = zone_code
-        generation["zone_name"] = zone_name
-        generation["country"] = zone_code.split("_")[0]
+        generation["zone_name"] = zone.name
+        generation["country"] = zone.country
         frames.append(generation)
 
     combined = pd.concat(frames, ignore_index=True)

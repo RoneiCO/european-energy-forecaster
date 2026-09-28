@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from energy_forecaster.config import EUROPEAN_ZONES, REFERENCE_TIMEZONE, Zone
 from energy_forecaster.ingestion import (
-    NORDIC_ZONES,
     fetch_all_zone_generation,
     fetch_all_zone_load,
     fetch_all_zone_prices,
@@ -16,7 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
 
 
-def pull_and_cache_year(data_type: str, fetch_fn, zones: dict[str, str], year: int) -> None:
+def pull_and_cache_year(data_type: str, fetch_fn, zones: dict[str, Zone], year: int) -> None:
     """Fetch one calendar year of data for all zones and cache it as Parquet, unless already cached."""
     out_path = RAW_DATA_DIR / data_type / f"year={year}.parquet"  # One file per data type per year.
     current_year = pd.Timestamp.now().year
@@ -24,7 +24,7 @@ def pull_and_cache_year(data_type: str, fetch_fn, zones: dict[str, str], year: i
         logger.info("Skipping %s %d, already cached at %s", data_type, year, out_path)
         return
 
-    tz = "Europe/Stockholm"
+    tz = REFERENCE_TIMEZONE
     start = pd.Timestamp(f"{year}-01-01", tz=tz)
     end = min(pd.Timestamp(f"{year + 1}-01-01", tz=tz), pd.Timestamp.now(tz=tz))
 
@@ -37,7 +37,7 @@ def pull_and_cache_year(data_type: str, fetch_fn, zones: dict[str, str], year: i
     logger.info("Saved %d rows to %s", len(df), out_path)
 
 
-def run_historical_pull(zones: dict[str, str] = NORDIC_ZONES, first_year: int = 2021) -> None:
+def run_historical_pull(zones: dict[str, Zone] = EUROPEAN_ZONES, first_year: int = 2021) -> None:
     """Pull and cache prices, load, and generation for every year from first_year through now."""
     current_year = pd.Timestamp.now().year
     fetchers = {
