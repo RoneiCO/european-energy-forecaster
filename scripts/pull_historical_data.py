@@ -7,7 +7,9 @@ from energy_forecaster.config import EUROPEAN_ZONES, REFERENCE_TIMEZONE, Zone
 from energy_forecaster.ingestion import (
     fetch_all_zone_generation,
     fetch_all_zone_load,
+    fetch_all_zone_load_forecast,
     fetch_all_zone_prices,
+    fetch_all_zone_wind_solar_forecast,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,6 +46,8 @@ def run_historical_pull(zones: dict[str, Zone] = EUROPEAN_ZONES, first_year: int
         "prices": fetch_all_zone_prices,
         "load": fetch_all_zone_load,
         "generation": fetch_all_zone_generation,
+        "load_forecast": fetch_all_zone_load_forecast,
+        "wind_solar_forecast": fetch_all_zone_wind_solar_forecast,
     }
     for data_type, fetch_fn in fetchers.items():
         for year in range(first_year, current_year + 1):

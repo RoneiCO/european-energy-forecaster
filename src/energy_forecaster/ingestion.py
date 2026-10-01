@@ -291,3 +291,88 @@ def _coalesce_duplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
             raise ValueError(f"Conflicting non-null values across duplicate '{name}' columns")
 
     return df.T.groupby(level=0).first().T
+
+
+def fetch_load_forecast(zone_code: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
+    """Fetch the day-ahead forecasted load (demand) for a bidding zone, resampled to hourly.
+
+    Args:
+        zone_code: ENTSO-E bidding zone code, e.g. "SE_4".
+        start: Start of the query window (must be timezone-aware).
+        end: End of the query window (must be timezone-aware).
+
+    Returns:
+        A Series containing hourly forecasted load values in MW for the specified zone.
+
+    Raises:
+        KeyError: If ENTSOE_API_KEY is not set in the environment.
+    """
+    client = get_client()
+    forecast = client.query_load_forecast(zone_code, start=start, end=end)
+    return forecast.iloc[:, 0].resample("1h").mean()
+
+
+def fetch_wind_solar_forecast(
+    zone_code: str, start: pd.Timestamp, end: pd.Timestamp
+) -> pd.DataFrame:
+    """Fetch the day-ahead forecasted wind/solar generation for a bidding zone, resampled to hourly.
+
+    Args:
+        zone_code: ENTSO-E bidding zone code, e.g. "SE_4".
+        start: Start of the query window (must be timezone-aware).
+        end: End of the query window (must be timezone-aware).
+
+    Returns:
+        A DataFrame containing hourly forecasted generation in MW for the specified zone,
+        with columns named "forecast_<technology>_mw" (e.g. "forecast_solar_mw",
+        "forecast_wind_onshore_mw").
+
+    Raises:
+        KeyError: If ENTSOE_API_KEY is not set in the environment.
+    """
+    client = get_client()
+    forecast = client.query_wind_and_solar_forecast(zone_code, start=start, end=end)
+    forecast = _coalesce_duplicate_columns(forecast)
+    forecast = forecast.resample("1h").mean()
+    forecast.columns = [f"forecast_{c.lower().replace(' ', '_')}_mw" for c in forecast.columns]
+    return forecast
+
+
+def fetch_all_zone_load_forecast(
+    zones: dict[str, Zone], start: pd.Timestamp, end: pd.Timestamp, max_retries: int = 3
+) -> pd.DataFrame:
+    """Fetch hourly day-ahead forecasted load for every zone, concatenated into one table."""
+    frames = []
+    for zone_code, zone in zones.items():
+        forecast = _fetch_with_retry(fetch_load_forecast, zone_code, start, end, max_retries)
+        if forecast is None:
+            continue
+        zone_df = forecast.rename("load_forecast_mw").to_frame()
+        zone_df["zone"] = zone_code
+        zone_df["zone_name"] = zone.name
+        zone_df["country"] = zone.country
+        frames.append(zone_df)
+    return _normalize_timestamp_column(pd.concat(frames).reset_index(names="timestamp"))
+
+
+def fetch_all_zone_wind_solar_forecast(
+    zones: dict[str, Zone], start: pd.Timestamp, end: pd.Timestamp, max_retries: int = 3
+) -> pd.DataFrame:
+    """Fetch hourly day-ahead forecasted wind/solar generation for every zone, missing techs as 0."""
+    frames = []
+    for zone_code, zone in zones.items():
+        forecast = _fetch_with_retry(fetch_wind_solar_forecast, zone_code, start, end, max_retries)
+        if forecast is None:
+            continue
+        forecast = forecast.rename_axis("timestamp").reset_index()
+        forecast["zone"] = zone_code
+        forecast["zone_name"] = zone.name
+        forecast["country"] = zone.country
+        frames.append(forecast)
+
+    combined = pd.concat(frames, ignore_index=True)
+    tech_cols = [
+        c for c in combined.columns if c not in ("timestamp", "zone", "zone_name", "country")
+    ]
+    combined[tech_cols] = combined[tech_cols].fillna(0)
+    return _normalize_timestamp_column(combined)
