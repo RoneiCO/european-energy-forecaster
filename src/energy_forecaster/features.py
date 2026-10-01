@@ -206,4 +206,15 @@ def get_generation_columns(df: pl.DataFrame) -> list[str]:
         c for c in df.columns if c not in _NON_GENERATION_COLUMNS and not c.startswith("forecast_")
     ]
 
-
+def build_feature_table(path: Path = PROCESSED_DATA_PATH) -> pl.DataFrame:
+    """Build the full model-ready feature table from the joined hourly dataset."""
+    df = load_hourly_dataset(path)
+    generation_cols = get_generation_columns(df)  # captured before any other feature is added
+    df = add_local_time(df)
+    df = add_temporal_features(df)
+    df = add_holiday_features(df)
+    df = add_lag_features(df)
+    df = add_price_rolling_features(df)
+    df = add_renewable_ratio_features(df, generation_cols)
+    df = add_forecast_renewable_features(df)
+    return df.drop(generation_cols)
