@@ -108,3 +108,102 @@ def add_lag_features(df: pl.DataFrame, lags: tuple[int, ...] = (24, 48, 168)) ->
     return df.sort(["zone", "timestamp"]).with_columns(
         [pl.col("price_eur_mwh").shift(lag).over("zone").alias(f"price_lag_{lag}h") for lag in lags]
     )
+
+
+def add_price_rolling_features(df: pl.DataFrame) -> pl.DataFrame:
+    """Add rolling mean price features, built on the 24h-lagged price so they stay forecast-safe.
+
+    A rolling window over the raw price would include the hour being predicted.
+    Rolling over `price_lag_24h` instead gives "average price over the day/week
+    ending 24h before the target hour" -- every value already known safely
+    before any auction closes. Requires add_lag_features to have run first.
+    """
+    return df.sort(["zone", "timestamp"]).with_columns(
+        pl.col("price_lag_24h")
+        .rolling_mean(window_size=24)
+        .over("zone")
+        .alias("price_rolling_24h_avg"),
+        pl.col("price_lag_24h")
+        .rolling_mean(window_size=168)
+        .over("zone")
+        .alias("price_rolling_7d_avg"),
+    )
+
+
+_NON_GENERATION_COLUMNS = {
+    "timestamp",
+    "zone",
+    "zone_name",
+    "country",
+    "price_eur_mwh",
+    "load_mw",
+    "load_forecast_mw",
+}
+_WIND_SOLAR_TECHNOLOGIES = ("Wind Onshore", "Wind Offshore", "Solar")
+
+
+def add_renewable_ratio_features(
+    df: pl.DataFrame, generation_cols: list[str], lag_hours: int = 48
+) -> pl.DataFrame:
+    """Add rolling mean/std of the wind+solar share of actual generation, lagged for safety.
+
+    Actual generation isn't known until well after the hour it describes, same as
+    load actuals -- a `lag_hours` shift (48h, the safe margin established earlier
+    for actuals) is applied before rolling, so every value in the window is safely
+    known before any auction for the target day closes.
+    """
+
+    renewable_cols = [c for c in generation_cols if c in _WIND_SOLAR_TECHNOLOGIES]
+    df = df.sort(["zone", "timestamp"]).with_columns(
+        pl.sum_horizontal(renewable_cols).alias("_renewable_mw"),
+        pl.sum_horizontal(generation_cols).alias("_total_generation_mw"),
+    )
+
+    df = df.with_columns(
+        pl.when(pl.col("_total_generation_mw") > 0)
+        .then(pl.col("_renewable_mw") / pl.col("_total_generation_mw"))
+        .otherwise(None)
+        .alias("_renewable_ratio")
+    )
+    df = df.with_columns(
+        pl.col("_renewable_ratio").shift(lag_hours).over("zone").alias("_renewable_ratio_lagged")
+    )
+    df = df.with_columns(
+        pl.col("_renewable_ratio_lagged")
+        .rolling_mean(window_size=168)
+        .over("zone")
+        .alias("renewable_ratio_rolling_7d_mean"),
+        pl.col("_renewable_ratio_lagged")
+        .rolling_std(window_size=168)
+        .over("zone")
+        .alias("renewable_ratio_rolling_7d_std"),
+    )
+    return df.drop(
+        "_renewable_mw", "_total_generation_mw", "_renewable_ratio", "_renewable_ratio_lagged"
+    )
+
+
+def add_forecast_renewable_features(df: pl.DataFrame) -> pl.DataFrame:
+    """Add forecasted renewable supply as a share of forecasted demand -- safe at full value."""
+    forecast_cols = [c for c in df.columns if c.startswith("forecast_")]
+    return df.with_columns(
+        pl.sum_horizontal(forecast_cols).alias("forecast_renewable_mw"),
+        (pl.sum_horizontal(forecast_cols) / pl.col("load_forecast_mw")).alias(
+            "forecast_renewable_share_of_load"
+        ),
+    )
+
+
+def get_generation_columns(df: pl.DataFrame) -> list[str]:
+    """Return the actual-generation technology columns of the freshly loaded hourly dataset.
+
+    Call this immediately after load_hourly_dataset(), before any other add_*
+    feature function runs. Those functions add non-generation columns (hour,
+    price_lag_24h, local_time, ...) that this by-elimination heuristic cannot
+    tell apart from a genuine generation technology column once they exist.
+    """
+    return [
+        c for c in df.columns if c not in _NON_GENERATION_COLUMNS and not c.startswith("forecast_")
+    ]
+
+
