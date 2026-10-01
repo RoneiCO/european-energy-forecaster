@@ -17,28 +17,19 @@ WITH combined AS (
         p.country,
         p.price_eur_mwh,
         l.load_mw,
-        g.* EXCLUDE (timestamp, zone, zone_name, country)
+        g.* EXCLUDE (timestamp, zone, zone_name, country),
+        lf.load_forecast_mw,
+        wsf.* EXCLUDE (timestamp, zone, zone_name, country)
     FROM prices p
     INNER JOIN load_data l USING (zone, timestamp)
     INNER JOIN generation g USING (zone, timestamp)
-),
-filled AS (
-    SELECT
-        timestamp, zone, zone_name, country, price_eur_mwh, load_mw,
-        COALESCE(COLUMNS(* EXCLUDE (timestamp, zone, zone_name, country, price_eur_mwh, load_mw)), 0)
-    FROM combined
+    INNER JOIN load_forecast lf USING (zone, timestamp)
+    INNER JOIN wind_solar_forecast wsf USING (zone, timestamp)
 )
 SELECT
-    *,
-    AVG(price_eur_mwh) OVER (
-        PARTITION BY zone ORDER BY timestamp
-        ROWS BETWEEN 23 PRECEDING AND CURRENT ROW
-    ) AS price_rolling_24h_avg,
-    AVG(price_eur_mwh) OVER (
-        PARTITION BY zone ORDER BY timestamp
-        ROWS BETWEEN 167 PRECEDING AND CURRENT ROW
-    ) AS price_rolling_7d_avg
-FROM filled
+    timestamp, zone, zone_name, country, price_eur_mwh, load_mw, load_forecast_mw,
+    COALESCE(COLUMNS(* EXCLUDE (timestamp, zone, zone_name, country, price_eur_mwh, load_mw, load_forecast_mw)), 0)
+FROM combined
 ORDER BY zone, timestamp
 """
 

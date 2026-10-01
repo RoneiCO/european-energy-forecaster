@@ -9,7 +9,8 @@ RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
 def get_connection() -> duckdb.DuckDBPyConnection:
     """Open a DuckDB connection with views over the raw Parquet lake (prices, load_data, generation)."""
     con = duckdb.connect()
-    for name in ("prices", "load", "generation"):
+    table_names = ("prices", "load", "generation", "load_forecast", "wind_solar_forecast")
+    for name in table_names:
         view_name = "load_data" if name == "load" else name
         glob_path = str(RAW_DATA_DIR / name / "*.parquet")
         con.execute(
