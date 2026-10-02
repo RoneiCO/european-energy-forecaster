@@ -206,6 +206,7 @@ def get_generation_columns(df: pl.DataFrame) -> list[str]:
         c for c in df.columns if c not in _NON_GENERATION_COLUMNS and not c.startswith("forecast_")
     ]
 
+
 def build_feature_table(path: Path = PROCESSED_DATA_PATH) -> pl.DataFrame:
     """Build the full model-ready feature table from the joined hourly dataset."""
     df = load_hourly_dataset(path)
@@ -217,4 +218,34 @@ def build_feature_table(path: Path = PROCESSED_DATA_PATH) -> pl.DataFrame:
     df = add_price_rolling_features(df)
     df = add_renewable_ratio_features(df, generation_cols)
     df = add_forecast_renewable_features(df)
+    df = null_suspect_forecast_runs(df)  # must run after add_forecast_renewable_features
     return df.drop(generation_cols)
+
+
+def null_suspect_forecast_runs(df: pl.DataFrame, min_hours: int = 12) -> pl.DataFrame:
+    """Null the renewable-forecast columns inside long runs of exactly zero.
+
+    In a zone that otherwise reports wind/solar forecasts, a forecast of exactly 0 MW
+    for half a day or more is missing or placeholder data, not weather: such runs start
+    at midnight, span whole days, and coincide across a country's zones. Both origins
+    (hours the API omitted that ingestion zero-filled, and zeros the TSO published) look
+    identical in stored data, so both are treated as missing.
+    """
+    forecast_cols = [c for c in df.columns if c.startswith("forecast_")]
+    df = df.sort(["zone", "timestamp"]).with_columns(
+        (pl.col("forecast_renewable_mw") == 0).alias("_is_zero")
+    )
+    df = df.with_columns(
+        (pl.col("_is_zero") != pl.col("_is_zero").shift(1).over("zone"))
+        .fill_null(True)
+        .cast(pl.Int32)
+        .alias("_new_run")
+    )
+    df = df.with_columns(pl.col("_new_run").cum_sum().over("zone").alias("_run_id"))
+    df = df.with_columns(pl.len().over(["zone", "_run_id"]).alias("_run_hours"))
+
+    has_signal = (pl.col("forecast_renewable_mw") > 0).any().over("zone")
+    suspect = pl.col("_is_zero") & (pl.col("_run_hours") >= min_hours) & has_signal
+    return df.with_columns(
+        [pl.when(suspect).then(None).otherwise(pl.col(c)).alias(c) for c in forecast_cols]
+    ).drop("_is_zero", "_new_run", "_run_id", "_run_hours")
