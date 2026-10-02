@@ -16,6 +16,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "pyarrow>=17.0",
     "holidays>=0.50",
+    "scikit-learn>=1.8",
 ]
 
 [project.optional-dependencies]
