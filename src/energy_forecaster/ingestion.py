@@ -15,6 +15,9 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+_PRICE_CHUNK_DAYS = 150
+_PRICE_CHUNK_PADDING = pd.Timedelta(days=2)
+
 
 def get_client() -> EntsoePandasClient:
     """Create an ENTSO-E client using the API key from the environment.
@@ -33,24 +36,17 @@ def get_client() -> EntsoePandasClient:
 
 
 def fetch_day_ahead_prices(zone_code: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
-    """Fetch day-ahead electricity prices for a bidding zone, resampled to hourly.
-
-    Args:
-        zone_code: ENTSO-E bidding zone code, e.g. "SE_4".
-        start: Start of the query window (must be timezone-aware).
-        end: End of the query window (must be timezone-aware).
-
-    Returns:
-        Hourly prices in EUR/MWh, indexed by timestamp. Source data from
-        before Oct 2025 is hourly; from Oct 2025 onward it's 15-minute and
-        gets averaged into hourly buckets here for a consistent series.
-
-    Raises:
-        KeyError: If ENTSOE_API_KEY is not set in the environment.
-    """
+    """Fetch day-ahead prices for a bidding zone in short windows, resampled to hourly."""
     client = get_client()
-    prices = client.query_day_ahead_prices(zone_code, start=start, end=end)
-    return prices.resample("1h").mean()  # standardize to hourly resolution.
+    pieces = [
+        client.query_day_ahead_prices(zone_code, start=w_start, end=w_end)
+        for w_start, w_end in _price_windows(start, end)
+    ]
+    prices = pd.concat(pieces)
+    prices = prices[~prices.index.duplicated(keep="first")].sort_index()
+    prices = prices[(prices.index >= start) & (prices.index <= end)]
+    _assert_no_interior_gaps(prices, zone_code)
+    return prices.resample("1h").mean()
 
 
 def fetch_all_zone_prices(
@@ -376,3 +372,35 @@ def fetch_all_zone_wind_solar_forecast(
     ]
     combined[tech_cols] = combined[tech_cols].fillna(0)
     return _normalize_timestamp_column(combined)
+
+
+def _price_windows(
+    start: pd.Timestamp, end: pd.Timestamp
+) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    """Split [start, end] into windows of at most _PRICE_CHUNK_DAYS days, each padded.
+
+    A prices request spanning a full calendar year silently loses one point (the first
+    point of the day before its one-year mark). Requests this short were tested clean,
+    and the padding keeps any loss at a window's edge, where trimming discards it.
+    """
+    windows = []
+    chunk_start = start
+    while chunk_start < end:
+        chunk_end = min(chunk_start + pd.DateOffset(days=_PRICE_CHUNK_DAYS), end)
+        windows.append((chunk_start - _PRICE_CHUNK_PADDING, chunk_end + _PRICE_CHUNK_PADDING))
+        chunk_start = chunk_end
+    return windows
+
+
+def _assert_no_interior_gaps(series: pd.Series, label: str) -> None:
+    """Raise if a point is missing between two present points, at any cadence.
+
+    A lost point makes one step between neighbors larger than the steps on both sides
+    of it. The switch from hourly to 15-minute data is not flagged: its step is not
+    larger than the step before it.
+    """
+    steps = series.index.to_series().diff()
+    bump = (steps > steps.shift(1)) & (steps > steps.shift(-1))
+    if bump.any():
+        examples = [str(t) for t in series.index[bump.to_numpy()][:3]]
+        raise ValueError(f"{label}: points missing before {', '.join(examples)}")
