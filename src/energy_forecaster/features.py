@@ -8,6 +8,7 @@ from energy_forecaster.config import EUROPEAN_ZONES, REFERENCE_TIMEZONE, Zone
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 PROCESSED_DATA_PATH = PROJECT_ROOT / "data" / "processed" / "hourly_dataset.parquet"
+FEATURE_TABLE_PATH = PROJECT_ROOT / "data" / "processed" / "feature_table.parquet"
 
 
 def load_hourly_dataset(
@@ -249,3 +250,12 @@ def null_suspect_forecast_runs(df: pl.DataFrame, min_hours: int = 12) -> pl.Data
     return df.with_columns(
         [pl.when(suspect).then(None).otherwise(pl.col(c)).alias(c) for c in forecast_cols]
     ).drop("_is_zero", "_new_run", "_run_id", "_run_hours")
+
+
+def load_feature_table(path: Path = FEATURE_TABLE_PATH) -> pl.DataFrame:
+    """Load the model-ready feature table, timestamps shown in the reference time zone."""
+    return (
+        pl.read_parquet(path)
+        .with_columns(pl.col("timestamp").dt.convert_time_zone(REFERENCE_TIMEZONE))
+        .sort(["zone", "timestamp"])
+    )
