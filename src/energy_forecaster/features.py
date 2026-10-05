@@ -220,6 +220,9 @@ def build_feature_table(path: Path = PROCESSED_DATA_PATH) -> pl.DataFrame:
     df = add_renewable_ratio_features(df, generation_cols)
     df = add_forecast_renewable_features(df)
     df = null_suspect_forecast_runs(df)  # must run after add_forecast_renewable_features
+    df = add_cross_zone_features(
+        df
+    )  # run after null_suspect_forecast_runs to avoid contaminating totals with placeholder zeros
     return df.drop(generation_cols)
 
 
@@ -258,4 +261,35 @@ def load_feature_table(path: Path = FEATURE_TABLE_PATH) -> pl.DataFrame:
         pl.read_parquet(path)
         .with_columns(pl.col("timestamp").dt.convert_time_zone(REFERENCE_TIMEZONE))
         .sort(["zone", "timestamp"])
+    )
+
+
+def _total_if_complete(column: str, over: str | list[str]) -> pl.Expr:
+    """Sum of `column` across rows sharing the `over` key, or null if any of them is null.
+
+    A partial sum would silently understate the group, so a gap in one zone makes
+    the whole total missing.
+    """
+    return (
+        pl.when(pl.col(column).null_count().over(over) == 0)
+        .then(pl.col(column).sum().over(over))
+        .otherwise(None)
+    )
+
+
+def add_cross_zone_features(df: pl.DataFrame) -> pl.DataFrame:
+    """Add system-wide and country-wide totals at the same hour.
+
+    All inputs are known at forecast time: the TSOs' day-ahead forecasts (same hour)
+    and prices lagged 24 hours.
+    """
+    country = ["timestamp", "country"]
+    return df.with_columns(
+        _total_if_complete("forecast_renewable_mw", "timestamp").alias(
+            "system_forecast_renewable_mw"
+        ),
+        _total_if_complete("load_forecast_mw", "timestamp").alias("system_load_forecast_mw"),
+        _total_if_complete("forecast_renewable_mw", country).alias("country_forecast_renewable_mw"),
+        _total_if_complete("load_forecast_mw", country).alias("country_load_forecast_mw"),
+        pl.col("price_lag_24h").mean().over("timestamp").alias("system_price_lag_24h"),
     )

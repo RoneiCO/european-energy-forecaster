@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
@@ -25,9 +27,20 @@ MODEL_FEATURE_COLUMNS = (
     NUMERIC_FEATURES + CATEGORICAL_FEATURES + CYCLICAL_FEATURES + BOOLEAN_FEATURES
 )
 
+CROSS_ZONE_FEATURES = [
+    "system_forecast_renewable_mw",
+    "system_load_forecast_mw",
+    "country_forecast_renewable_mw",
+    "country_load_forecast_mw",
+    "system_price_lag_24h",
+]
+ALL_FEATURE_COLUMNS = MODEL_FEATURE_COLUMNS + CROSS_ZONE_FEATURES
 
-def build_preprocessor() -> ColumnTransformer:
+
+def build_preprocessor(extra_numeric: Sequence[str] = ()) -> ColumnTransformer:
     """Build (but do not fit) the leakage-free preprocessing pipeline.
+
+    `extra_numeric` adds columns to the scaled group, for feature experiments.
 
     Must be fit only on a training split, never on the full dataset -- fitting
     StandardScaler on data that includes the test period leaks the test period's
@@ -37,7 +50,7 @@ def build_preprocessor() -> ColumnTransformer:
     """
     return ColumnTransformer(
         transformers=[
-            ("numeric", StandardScaler(), NUMERIC_FEATURES),
+            ("numeric", StandardScaler(), [*NUMERIC_FEATURES, *extra_numeric]),
             ("categorical", OneHotEncoder(handle_unknown="ignore"), CATEGORICAL_FEATURES),
             ("passthrough", "passthrough", CYCLICAL_FEATURES + BOOLEAN_FEATURES),
         ],
