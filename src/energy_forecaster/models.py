@@ -36,6 +36,37 @@ def build_ridge_pipeline(alpha: float = 1.0) -> Pipeline:
     )
 
 
+def predict_split(
+    pipeline: Pipeline, df: pl.DataFrame, split: Split, predict_change: bool = False
+) -> tuple[pl.DataFrame, int]:
+    """Fit a fresh copy of `pipeline` on a split's training rows and predict its evaluation rows.
+
+    Returns one row per evaluation hour (timestamp, zone, actual, yesterday, predicted)
+    and the number of training rows used.
+    """
+    train, evaluation = apply_split(df, split)
+    train = train.drop_nulls([TARGET_COLUMN, *HISTORY_COLUMNS])
+    evaluation = evaluation.drop_nulls([TARGET_COLUMN, BASELINE_COLUMN])
+
+    y_train = train[TARGET_COLUMN].to_numpy()
+    if predict_change:
+        y_train = y_train - train[BASELINE_COLUMN].to_numpy()
+
+    model = clone(pipeline)  # an unfitted copy: nothing carries over between splits
+    model.fit(train.select(MODEL_FEATURE_COLUMNS).to_pandas(), y_train)
+    predicted = model.predict(evaluation.select(MODEL_FEATURE_COLUMNS).to_pandas())
+    if predict_change:
+        predicted = predicted + evaluation[BASELINE_COLUMN].to_numpy()
+
+    predictions = evaluation.select(
+        "timestamp",
+        "zone",
+        pl.col(TARGET_COLUMN).alias("actual"),
+        pl.col(BASELINE_COLUMN).alias("yesterday"),
+    ).with_columns(pl.Series("predicted", predicted))
+    return predictions, train.height
+
+
 def evaluate_pipeline(
     pipeline: Pipeline,
     df: pl.DataFrame,
@@ -43,35 +74,18 @@ def evaluate_pipeline(
     name: str,
     predict_change: bool = False,
 ) -> pl.DataFrame:
-    """Fit a fresh copy of `pipeline` on each split's training rows, score it on the rest.
-
-    With predict_change, the model learns price minus yesterday's price, and
-    yesterday's price is added back to its predictions.
-    """
+    """Score a pipeline on each split: MAE and RMSE, absolute and relative to yesterday."""
     rows: list[dict[str, str | int | float]] = []
     for split in splits:
-        train, evaluation = apply_split(df, split)
-        train = train.drop_nulls([TARGET_COLUMN, *HISTORY_COLUMNS])
-        evaluation = evaluation.drop_nulls([TARGET_COLUMN, BASELINE_COLUMN])
-
-        y_train = train[TARGET_COLUMN].to_numpy()
-        if predict_change:
-            y_train = y_train - train[BASELINE_COLUMN].to_numpy()
-
-        model = clone(pipeline)  # an unfitted copy: nothing carries over between splits
-        model.fit(train.select(MODEL_FEATURE_COLUMNS).to_pandas(), y_train)
-        predicted = model.predict(evaluation.select(MODEL_FEATURE_COLUMNS).to_pandas())
-        if predict_change:
-            predicted = predicted + evaluation[BASELINE_COLUMN].to_numpy()
-
-        model_scores = score(evaluation[TARGET_COLUMN], pl.Series(predicted))
-        baseline_scores = score(evaluation[TARGET_COLUMN], evaluation[BASELINE_COLUMN])
+        predictions, train_rows = predict_split(pipeline, df, split, predict_change)
+        model_scores = score(predictions["actual"], predictions["predicted"])
+        baseline_scores = score(predictions["actual"], predictions["yesterday"])
         rows.append(
             {
                 "split": split.name,
                 "model": name,
-                "train_rows": train.height,
-                "eval_rows": evaluation.height,
+                "train_rows": train_rows,
+                "eval_rows": predictions.height,
                 "mae": round(model_scores["mae"], 1),
                 "rmse": round(model_scores["rmse"], 1),
                 "rmse_to_mae": round(model_scores["rmse"] / model_scores["mae"], 2),
