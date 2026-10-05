@@ -56,6 +56,28 @@ def main() -> None:
         )
     )
 
+    pred = pred.with_columns((pl.col("actual") - pl.col("predicted")).alias("residual"))
+
+    # Mean of (actual - predicted) per split: negative means the model over-predicts
+    print(
+        pred.group_by("split")
+        .agg(pl.col("residual").mean().round(1).alias("mean_residual"))
+        .sort("split")
+    )
+
+    # Do the zones' errors move together? Correlation of hourly residuals between zones.
+    wide = (
+        pred.pivot(on="zone", index="timestamp", values="residual").drop_nulls().drop("timestamp")
+    )
+    corr = (
+        wide.corr()
+        .with_columns(pl.Series("zone", wide.columns))
+        .select("zone", pl.exclude("zone"))
+        .with_columns(pl.exclude("zone").round(2))
+    )
+    with pl.Config(tbl_rows=20, tbl_cols=-1):
+        print(corr)
+
 
 if __name__ == "__main__":
     main()
