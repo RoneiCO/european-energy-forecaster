@@ -20,7 +20,7 @@ def main() -> None:
             ),
         ]
     ).sort(["split", "model"])
-    with pl.Config(tbl_rows=20):
+    with pl.Config(tbl_rows=20, tbl_cols=-1):
         print(results)
 
 
