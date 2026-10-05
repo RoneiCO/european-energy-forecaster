@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+
 import polars as pl
 from sklearn.base import clone
 from sklearn.impute import SimpleImputer
@@ -7,7 +9,7 @@ from xgboost import XGBRegressor
 
 from energy_forecaster.metrics import relative_mae, score
 from energy_forecaster.preprocessing import (
-    MODEL_FEATURE_COLUMNS,
+    ALL_FEATURE_COLUMNS,
     TARGET_COLUMN,
     build_preprocessor,
 )
@@ -53,8 +55,8 @@ def predict_split(
         y_train = y_train - train[BASELINE_COLUMN].to_numpy()
 
     model = clone(pipeline)  # an unfitted copy: nothing carries over between splits
-    model.fit(train.select(MODEL_FEATURE_COLUMNS).to_pandas(), y_train)
-    predicted = model.predict(evaluation.select(MODEL_FEATURE_COLUMNS).to_pandas())
+    model.fit(train.select(ALL_FEATURE_COLUMNS).to_pandas(), y_train)
+    predicted = model.predict(evaluation.select(ALL_FEATURE_COLUMNS).to_pandas())
     if predict_change:
         predicted = predicted + evaluation[BASELINE_COLUMN].to_numpy()
 
@@ -97,7 +99,10 @@ def evaluate_pipeline(
 
 
 def build_xgboost_pipeline(
-    n_estimators: int = 400, learning_rate: float = 0.05, max_depth: int = 6
+    extra_numeric: Sequence[str] = (),
+    n_estimators: int = 400,
+    learning_rate: float = 0.05,
+    max_depth: int = 6,
 ) -> Pipeline:
     """Preprocessing, then gradient-boosted trees trained to minimize absolute error.
 
@@ -115,4 +120,4 @@ def build_xgboost_pipeline(
         n_jobs=-1,
         random_state=0,
     )
-    return Pipeline([("preprocess", build_preprocessor()), ("model", model)])
+    return Pipeline([("preprocess", build_preprocessor(extra_numeric)), ("model", model)])

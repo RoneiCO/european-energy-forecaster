@@ -6,6 +6,7 @@ from energy_forecaster.models import (
     build_xgboost_pipeline,
     evaluate_pipeline,
 )
+from energy_forecaster.preprocessing import CROSS_ZONE_FEATURES
 from energy_forecaster.splits import CV_SPLITS
 
 
@@ -16,7 +17,10 @@ def main() -> None:
             evaluate_pipeline(build_ridge_pipeline(), df, CV_SPLITS, "ridge"),
             evaluate_pipeline(build_xgboost_pipeline(), df, CV_SPLITS, "xgb_level"),
             evaluate_pipeline(
-                build_xgboost_pipeline(), df, CV_SPLITS, "xgb_change", predict_change=True
+                build_xgboost_pipeline(extra_numeric=CROSS_ZONE_FEATURES),
+                df,
+                CV_SPLITS,
+                "xgb_xzone",
             ),
         ]
     ).sort(["split", "model"])
