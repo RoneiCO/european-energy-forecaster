@@ -223,6 +223,9 @@ def build_feature_table(path: Path = PROCESSED_DATA_PATH) -> pl.DataFrame:
     df = add_cross_zone_features(
         df
     )  # run after null_suspect_forecast_runs to avoid contaminating totals with placeholder zeros
+    df = add_external_features(
+        df
+    )  # run after add_cross_zone_features to avoid contaminating totals with placeholder zeros
     return df.drop(generation_cols)
 
 
@@ -292,4 +295,44 @@ def add_cross_zone_features(df: pl.DataFrame) -> pl.DataFrame:
         _total_if_complete("forecast_renewable_mw", country).alias("country_forecast_renewable_mw"),
         _total_if_complete("load_forecast_mw", country).alias("country_load_forecast_mw"),
         pl.col("price_lag_24h").mean().over("timestamp").alias("system_price_lag_24h"),
+    )
+
+
+def _read_raw_hourly(folder: str) -> pl.DataFrame:
+    """Read every cached yearly file of one raw data type, tolerating columns that differ by year."""
+    files = sorted((PROJECT_ROOT / "data" / "raw" / folder).glob("*.parquet"))
+    return pl.concat([pl.read_parquet(f) for f in files], how="diagonal")
+
+
+def add_external_features(df: pl.DataFrame) -> pl.DataFrame:
+    """Join market-wide German features: yesterday's price and the day-ahead load/wind/solar forecasts.
+
+    One German series, joined to every zone by timestamp. Everything is known at forecast
+    time: the price lagged 24 hours, and the TSOs' day-ahead forecasts.
+    """
+    price = (
+        _read_raw_hourly("external_prices")
+        .sort("timestamp")
+        .select("timestamp", pl.col("price_eur_mwh").shift(24).alias("de_price_lag_24h"))
+    )
+    load = _read_raw_hourly("external_load_forecast").select(
+        "timestamp", pl.col("load_forecast_mw").alias("de_load_forecast_mw")
+    )
+    wind_solar = _read_raw_hourly("external_wind_solar_forecast")
+    renewable = pl.sum_horizontal([c for c in wind_solar.columns if c.startswith("forecast_")])
+    wind_solar = wind_solar.select(
+        "timestamp",
+        # Germany's wind + solar is never exactly zero: a zero means the hour is missing
+        pl.when(renewable > 0).then(renewable).otherwise(None).alias("de_forecast_renewable_mw"),
+    )
+    return (
+        df.join(price, on="timestamp", how="left")
+        .join(load, on="timestamp", how="left")
+        .join(wind_solar, on="timestamp", how="left")
+        .with_columns(
+            (pl.col("de_forecast_renewable_mw") / pl.col("de_load_forecast_mw")).alias(
+                "de_forecast_renewable_share_of_load"
+            )
+        )
+        .sort(["zone", "timestamp"])
     )

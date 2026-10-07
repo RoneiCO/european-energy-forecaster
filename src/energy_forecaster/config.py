@@ -28,3 +28,8 @@ EUROPEAN_ZONES: dict[str, Zone] = {
     "DK_2": Zone("Denmark (East)", "DK", "Europe/Copenhagen"),
     "FI": Zone("Finland", "FI", "Europe/Helsinki"),
 }
+
+# Markets outside the modeled panel, ingested only as extra features (never predicted).
+EXTERNAL_ZONES: dict[str, Zone] = {
+    "DE_LU": Zone("Germany/Luxembourg", "DE", "Europe/Berlin"),
+}

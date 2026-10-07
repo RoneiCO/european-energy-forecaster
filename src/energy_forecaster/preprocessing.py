@@ -34,13 +34,20 @@ CROSS_ZONE_FORECAST_FEATURES = [
     "country_load_forecast_mw",
 ]
 CROSS_ZONE_PRICE_FEATURES = ["system_price_lag_24h"]
+
 CROSS_ZONE_FEATURES = CROSS_ZONE_FORECAST_FEATURES + CROSS_ZONE_PRICE_FEATURES
 
 # Extra numeric features adopted after the ablation: forecast totals only.
 # The price-level feature failed the adoption rule (gain of at least 0.01 in every split).
 ADOPTED_EXTRA_FEATURES = CROSS_ZONE_FORECAST_FEATURES
 
-ALL_FEATURE_COLUMNS = MODEL_FEATURE_COLUMNS + CROSS_ZONE_FEATURES
+EXTERNAL_FEATURES = [
+    "de_price_lag_24h",
+    "de_load_forecast_mw",
+    "de_forecast_renewable_mw",
+    "de_forecast_renewable_share_of_load",
+]
+ALL_FEATURE_COLUMNS = MODEL_FEATURE_COLUMNS + CROSS_ZONE_FEATURES + EXTERNAL_FEATURES
 
 
 def build_preprocessor(extra_numeric: Sequence[str] = ()) -> ColumnTransformer:
