@@ -2,6 +2,7 @@ import polars as pl
 
 from energy_forecaster.features import load_feature_table
 from energy_forecaster.models import build_xgboost_pipeline, predict_split
+from energy_forecaster.preprocessing import CROSS_ZONE_FEATURES
 from energy_forecaster.splits import CV_SPLITS
 
 
@@ -25,7 +26,9 @@ def main() -> None:
     df = load_feature_table()
     frames = []
     for split in CV_SPLITS:
-        predictions, _ = predict_split(build_xgboost_pipeline(), df, split)
+        predictions, _ = predict_split(
+            build_xgboost_pipeline(extra_numeric=CROSS_ZONE_FEATURES), df, split
+        )
         frames.append(predictions.with_columns(pl.lit(split.name).alias("split")))
 
     pred = pl.concat(frames).with_columns(
