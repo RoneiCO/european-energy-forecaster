@@ -49,21 +49,32 @@ EXTERNAL_FEATURES = [
 ]
 ALL_FEATURE_COLUMNS = MODEL_FEATURE_COLUMNS + CROSS_ZONE_FEATURES + EXTERNAL_FEATURES
 
+# Features derived from the TSOs' day-ahead wind/solar forecasts. The regulation only
+# guarantees these by 18:00 on D-1, after the 12:00 auction gate closure.
+WIND_SOLAR_FORECAST_FEATURES = [
+    "forecast_wind_onshore_mw",
+    "forecast_solar_mw",
+    "forecast_wind_offshore_mw",
+    "forecast_renewable_mw",
+    "forecast_renewable_share_of_load",
+    "system_forecast_renewable_mw",
+    "country_forecast_renewable_mw",
+    "de_forecast_renewable_mw",
+    "de_forecast_renewable_share_of_load",
+]
 
-def build_preprocessor(extra_numeric: Sequence[str] = ()) -> ColumnTransformer:
+
+def build_preprocessor(
+    extra_numeric: Sequence[str] = (), drop_numeric: Sequence[str] = ()
+) -> ColumnTransformer:
     """Build (but do not fit) the leakage-free preprocessing pipeline.
 
-    `extra_numeric` adds columns to the scaled group, for feature experiments.
-
-    Must be fit only on a training split, never on the full dataset -- fitting
-    StandardScaler on data that includes the test period leaks the test period's
-    distribution into the model before evaluation, even though no row of test
-    data is directly visible to it. See Phase 3 for the temporal split this
-    pipeline is fit against.
+    `extra_numeric` adds columns to the scaled group; `drop_numeric` removes some.
     """
+    numeric = [c for c in [*NUMERIC_FEATURES, *extra_numeric] if c not in set(drop_numeric)]
     return ColumnTransformer(
         transformers=[
-            ("numeric", StandardScaler(), [*NUMERIC_FEATURES, *extra_numeric]),
+            ("numeric", StandardScaler(), numeric),
             ("categorical", OneHotEncoder(handle_unknown="ignore"), CATEGORICAL_FEATURES),
             ("passthrough", "passthrough", CYCLICAL_FEATURES + BOOLEAN_FEATURES),
         ],

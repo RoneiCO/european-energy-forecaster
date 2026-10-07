@@ -100,6 +100,7 @@ def evaluate_pipeline(
 
 def build_xgboost_pipeline(
     extra_numeric: Sequence[str] = (),
+    drop_numeric: Sequence[str] = (),
     n_estimators: int = 400,
     learning_rate: float = 0.05,
     max_depth: int = 6,
@@ -120,4 +121,6 @@ def build_xgboost_pipeline(
         n_jobs=-1,
         random_state=0,
     )
-    return Pipeline([("preprocess", build_preprocessor(extra_numeric)), ("model", model)])
+    return Pipeline(
+        [("preprocess", build_preprocessor(extra_numeric, drop_numeric)), ("model", model)]
+    )
