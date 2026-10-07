@@ -6,7 +6,7 @@ from energy_forecaster.models import (
     build_xgboost_pipeline,
     evaluate_pipeline,
 )
-from energy_forecaster.preprocessing import ADOPTED_EXTRA_FEATURES
+from energy_forecaster.preprocessing import ADOPTED_EXTRA_FEATURES, EXTERNAL_FEATURES
 from energy_forecaster.splits import CV_SPLITS
 
 
@@ -16,6 +16,9 @@ def main() -> None:
         "ridge": build_ridge_pipeline(),
         "xgb_level": build_xgboost_pipeline(),
         "xgb_forecasts": build_xgboost_pipeline(extra_numeric=ADOPTED_EXTRA_FEATURES),
+        "xgb_germany": build_xgboost_pipeline(
+            extra_numeric=[*ADOPTED_EXTRA_FEATURES, *EXTERNAL_FEATURES]
+        ),
     }
     results = pl.concat(
         [evaluate_pipeline(pipeline, df, CV_SPLITS, name) for name, pipeline in models.items()]
