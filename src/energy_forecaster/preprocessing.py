@@ -27,13 +27,15 @@ MODEL_FEATURE_COLUMNS = (
     NUMERIC_FEATURES + CATEGORICAL_FEATURES + CYCLICAL_FEATURES + BOOLEAN_FEATURES
 )
 
-CROSS_ZONE_FEATURES = [
+CROSS_ZONE_FORECAST_FEATURES = [
     "system_forecast_renewable_mw",
     "system_load_forecast_mw",
     "country_forecast_renewable_mw",
     "country_load_forecast_mw",
-    "system_price_lag_24h",
 ]
+CROSS_ZONE_PRICE_FEATURES = ["system_price_lag_24h"]
+CROSS_ZONE_FEATURES = CROSS_ZONE_FORECAST_FEATURES + CROSS_ZONE_PRICE_FEATURES
+
 ALL_FEATURE_COLUMNS = MODEL_FEATURE_COLUMNS + CROSS_ZONE_FEATURES
 
 
