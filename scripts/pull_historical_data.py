@@ -52,6 +52,7 @@ def run_historical_pull(zones: dict[str, Zone] = EUROPEAN_ZONES, first_year: int
         "external_prices": (fetch_all_zone_prices, EXTERNAL_ZONES),
         "external_load_forecast": (fetch_all_zone_load_forecast, EXTERNAL_ZONES),
         "external_wind_solar_forecast": (fetch_all_zone_wind_solar_forecast, EXTERNAL_ZONES),
+        "external_generation": (fetch_all_zone_generation, EXTERNAL_ZONES),
     }
     for data_type, (fetch_fn, fetch_zones) in fetchers.items():
         for year in range(first_year, current_year + 1):
