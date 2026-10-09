@@ -35,15 +35,20 @@ Zones, their countries and their time zones live in one place, `src/energy_forec
 
 ## Key Design Decisions
 
-- **Python 3.12, after starting on 3.14** → Development began on the newest available Python release, but several core dependencies (`polars`, `duckdb`, `xgboost`, `shap`) didn't yet have stable prebuilt wheels for it, risking slow or broken source-compiled installs. Standardizing on 3.12, mature, stable, universally supported by the scientific Python ecosystem, traded a few months of "newest version" for a reliable, reproducible environment.
+- **Python 3.12, after starting on 3.14** → Development began on the newest available Python release, but several core dependencies (`polars`, `duckdb`, `xgboost`, `shap`) didn't yet have stable prebuilt wheels for it, risking slow or broken source-compiled installs. Standardizing on 3.12 traded a few months of "newest version" for a reliable, reproducible environment.
 - **Hourly resolution as the canonical grain** → On October 1, 2025, Europe's entire day-ahead electricity market (Nord Pool included) switched from hourly to 15-minute pricing intervals across every bidding zone. Left as-is, this would silently change the data's granularity partway through the historical range, corrupting lag features and rolling averages that assume a consistent frequency. Every series is resampled to hourly at the ingestion layer, averaging each quarter-hour group where applicable, trading a small amount of intra-hour detail in the recent period for one clean, consistent multi-year series.
 - **Multi-country Nordic scope (12 zones)** → Bidding zones don't exist in isolation; cross-border transmission flows and regional weather patterns heavily influence localized prices. Modeling interconnected zones together supports capturing spatial feature interactions (e.g., a wind generation surplus in DK1 depressing prices in SE3).
 - **`src/` layout package structure** → Enforces a clean separation between runnable scripts (`scripts/`) and reusable core library logic (`src/energy_forecaster/`), avoiding import-path ambiguity and enabling a proper editable install (`pip install -e .`) for development.
-- **DuckDB + Parquet as the storage and query layer** → Analytical tables are stored as columnar `.parquet` files and queried via DuckDB, which runs in-process (no separate database server to install, configure, or manage, unlike Postgres) while still supporting multi-gigabyte aggregations, CTEs, and window functions directly over the files on disk.
+- **DuckDB + Parquet as the storage and query layer** → Analytical tables are stored as columnar `.parquet` files and queried via DuckDB, which runs in-process while still supporting multi-gigabyte aggregations, CTEs, and window functions directly over the files on disk.
 - **Forecast-safe features only** → The day-ahead auction for day D closes at 12:00 on day D-1, so a feature is usable only if it would have existed at that moment. Price lags are at least 24 hours; lags of actual load and generation are at least 48 hours; and the wind, solar and load picture for the target day comes from the TSOs' own day-ahead forecasts, never from same-hour actuals. The joined `hourly_dataset.parquet` contains same-hour actuals (they are needed to build lags), so it is *not* safe to feed to a model directly, `build_feature_table` produces the safe table, and drops the raw generation columns once the lagged features are computed.
 - **Calendar features on each zone's own clock** → Hour of day, weekday and public holidays are computed from each row's local time in its zone's time zone. Using a single clock would, for example, mark the first hour of Finland's Independence Day as an ordinary day.
 - **Polars for feature engineering, pandas only at the scikit-learn boundary** → Per-zone lag and rolling features are expressed with Polars' `.over("zone")` (the equivalent of SQL's `PARTITION BY`); the data is converted to pandas only where scikit-learn requires it.
 - **Preprocessing is defined now and fit later** → The `ColumnTransformer` (scaling, one-hot encoding) lives in `preprocessing.py`, but it is only ever fit on the training split, because fitting a scaler on data that includes the test period leaks the test period's distribution into the model.
+
+- **Expanding-year cross-validation, with 2026 held out and scored once** → Folds train on all years before the evaluated year (2021–22 → 2023, 2021–23 → 2024, 2021–24 → 2025), mirroring how the model would be used. Model and feature decisions were made on those folds only; the 2026 test period was scored a single time at the end and nothing was changed afterwards.
+- **Relative MAE against a "yesterday" baseline as the headline metric** → The baseline is the price of the same hour 24 hours earlier, the strongest of several naive baselines tried. 1.0 means "no better than yesterday". RMSE is reported alongside, because a few spikes dominate it.
+- **Pre-registered predictions and adoption rules** → Each experiment had its expected result and its adoption rule written down before it was run, so the outcome could not bend the decision. Misses are reported with the hits.
+- **Day-level bootstrap intervals** → Hourly errors within a day are strongly correlated, so uncertainty is estimated by resampling whole days.
 
 ## Data Quality Issues Found & Resolved
 
@@ -95,6 +100,43 @@ Working against a live, external data source surfaced several real data-quality 
 
 **Fix:** At feature time, such runs are treated as missing: 1,577 zone-hours (about 0.26% of rows) are set to null, while zones that are entirely zero (NO5 has no wind or solar in the data) are left alone. The count matched the sum of the listed runs exactly.
 
+## Modeling & Results
+
+The model forecasts the hourly price of the next day in all 12 zones using only information available before the 12:00 auction close, including the grid operators' own day-ahead forecasts for the target day.
+
+### Model ladder (cross-validation, mean relative MAE over 2023, 2024 and 2025)
+
+| Model | Relative MAE |
+|---|---|
+| "Yesterday" baseline | 1.000 |
+| Ridge regression | 0.977 |
+| XGBoost, base features | 0.801 |
+| + cross-zone forecast aggregates | 0.756 |
+| + German day-ahead market features | **0.706** |
+
+German features improved every fold (0.048, 0.054 and 0.048), most in western Denmark (0.119). A random search over 13 XGBoost configurations found a best mean of 0.698, a gain of 0.008. That is below the pre-registered threshold of 0.01, so the default settings were kept.
+
+### Held-out test, 1 January to 7 October 2026 (scored once)
+
+| Model | MAE | RMSE | Relative MAE | 95% interval |
+|---|---|---|---|---|
+| "Yesterday" baseline | about 24.6 | | 1.000 | |
+| Full model | 19.1 | 28.6 | **0.776** | [0.737, 0.815] |
+| Without wind/solar forecasts | 21.6 | 32.4 | **0.877** | [0.846, 0.908] |
+
+Intervals are 95% bootstrap intervals over whole days. The model beats the baseline clearly, but **less than cross-validation suggested** (0.706). 2026 was a harder year: the mean price was 80 EUR/MWh against 45 in 2025, and the baseline's own error rose 22%. The model's error rose more (about 36%), and the loss is concentrated in the zones where prices moved most. In NO3 and NO5 the model was worse than the baseline (relative MAE 1.09). Across the 12 zones, the rank correlation between the price rise and the deterioration was 0.83. Two explanations fit this and the data cannot separate them: price levels the model rarely saw, and hydrology (reservoir levels) that no feature describes. Neither has been tested.
+
+### What the model uses
+
+SHAP values (model fitted on 2021–2024, explained on 2025) show that price history carries about 46% of the attribution (the previous day's price alone, 28%), the wind, solar and load forecasts about 40%, and the German features 13% combined. Calendar features are used little, because the daily shape is already in the previous day's price.
+
+### Limitations
+
+- **Forecast vintage.** The stored wind/solar forecasts carry no publication time, and the regulation guarantees them only by 18:00 on D-1, after the auction closes. Removing them gives a lower bracket (0.929 in cross-validation, 0.877 on the test year). Independent noise at the size of the German forecast error costs only about 0.01, so the model relies on the forecast's level more than its precision. Errors correlated across zones were not tested.
+- **One test year**, and an unusual one. The interval reflects which days happened to be sampled, not a change of regime.
+- **Reservoir levels are not features.** The hydro-dominated Norwegian zones are the weakest.
+- **Selection effects.** Features were chosen on the same three folds used to report cross-validation scores, so 0.706 is somewhat optimistic by construction.
+
 ## Known Data Gaps
 
 - **Swedish load forecast, 2025-12-04:** the API returns no day-ahead load forecast for SE1–SE4 that day (96 zone-hours). Left as null.
@@ -144,6 +186,16 @@ python scripts/build_features.py
 
 The first full pull takes a while (tens of minutes per data type). Finished past years are cached permanently; the current year is re-fetched on every run.
 
+To reproduce the modeling results:
+
+```bash
+python scripts/evaluate_baselines.py   # naive baselines per year, zone and weekday
+python scripts/evaluate_models.py      # the model ladder on the cross-validation folds
+python scripts/tune_xgboost.py         # random search (long: about 39 model fits)
+python scripts/final_test.py           # the 2026 test, run once
+python scripts/explain_model.py        # SHAP importance
+```
+
 - `data/raw/` — one Parquet file per data type and year.
 - `data/processed/hourly_dataset.parquet` — all sources joined by zone and hour. Contains same-hour actuals, so it is not model-safe.
 - `data/processed/feature_table.parquet` — the forecast-safe, model-ready feature table.
@@ -152,6 +204,6 @@ The first full pull takes a while (tens of minutes per data type). Finished past
 
 - [x] Phase 1: Data ingestion, DuckDB warehouse layer, hourly modeling dataset
 - [x] Phase 2: Feature engineering and leakage-free preprocessing pipeline
-- [ ] Phase 3: Model training & evaluation
+- [x] Phase 3: Model training & evaluation
 - [ ] Phase 4: Testing, CI/CD, Docker
 - [ ] Phase 5: Streamlit dashboard & deployment
