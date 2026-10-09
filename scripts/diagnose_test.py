@@ -20,6 +20,21 @@ def main() -> None:
         )
         .sort("year")
     )
+    zone_year = (
+        df.with_columns(pl.col("timestamp").dt.year().alias("year"))
+        .filter(pl.col("year") >= 2023)
+        .group_by("zone", "year")
+        .agg(pl.col(TARGET_COLUMN).mean().round(1))
+        .pivot(on="year", index="zone", values=TARGET_COLUMN)
+        .with_columns(
+            (pl.col("2026") - (pl.col("2023") + pl.col("2024") + pl.col("2025")) / 3)
+            .round(1)
+            .alias("rise_2026")
+        )
+        .sort("zone")
+    )
+    with pl.Config(tbl_rows=20, tbl_cols=-1):
+        print(zone_year)
     print(by_year)
 
 
