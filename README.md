@@ -1,4 +1,5 @@
 # European Energy Market Analytics & Price Forecasting Engine
+
 ![CI](https://github.com/RoneiCO/european-energy-forecaster/actions/workflows/ci.yml/badge.svg)
 
 ## Overview
@@ -201,10 +202,30 @@ python scripts/explain_model.py        # SHAP importance
 - `data/processed/hourly_dataset.parquet` — all sources joined by zone and hour. Contains same-hour actuals, so it is not model-safe.
 - `data/processed/feature_table.parquet` — the forecast-safe, model-ready feature table.
 
+### 6. Run the tests
+
+```bash
+pytest                                   # 38 passed with the data built, 5 skipped without it
+pytest --cov=energy_forecaster --cov-report=term-missing
+pre-commit install                       # run the checks on every commit
+```
+
+### 7. Or use Docker
+
+```bash
+docker build -t energy-forecaster .
+docker run --rm energy-forecaster                                   # tests, without data
+docker run --rm -v "$PWD/data:/app/data" energy-forecaster          # tests with the local data
+docker run --rm --env-file .env -v "$PWD/data:/app/data" energy-forecaster \
+    python scripts/pull_historical_data.py                          # pull data; the token is passed at run time
+```
+
+The ENTSO-E token is never copied into the image (`.env` is in `.dockerignore`).
+
 ## Project Status
 
 - [x] Phase 1: Data ingestion, DuckDB warehouse layer, hourly modeling dataset
 - [x] Phase 2: Feature engineering and leakage-free preprocessing pipeline
 - [x] Phase 3: Model training & evaluation
-- [ ] Phase 4: Testing, CI/CD, Docker
+- [x] Phase 4: Testing, CI/CD, Docker
 - [ ] Phase 5: Streamlit dashboard & deployment
