@@ -99,11 +99,15 @@ def evaluate_pipeline(
 
 
 def build_xgboost_pipeline(
-    extra_numeric: Sequence[str] = (),
-    drop_numeric: Sequence[str] = (),
     n_estimators: int = 400,
     learning_rate: float = 0.05,
     max_depth: int = 6,
+    min_child_weight: float = 1.0,
+    subsample: float = 0.8,
+    colsample_bytree: float = 0.8,
+    reg_lambda: float = 1.0,
+    extra_numeric: Sequence[str] = (),
+    drop_numeric: Sequence[str] = (),
 ) -> Pipeline:
     """Preprocessing, then gradient-boosted trees trained to minimize absolute error.
 
@@ -115,8 +119,10 @@ def build_xgboost_pipeline(
         n_estimators=n_estimators,
         learning_rate=learning_rate,
         max_depth=max_depth,
-        subsample=0.8,
-        colsample_bytree=0.8,
+        subsample=subsample,
+        colsample_bytree=colsample_bytree,
+        min_child_weight=min_child_weight,
+        reg_lambda=reg_lambda,
         tree_method="hist",
         n_jobs=-1,
         random_state=0,
