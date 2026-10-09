@@ -1,4 +1,5 @@
 # European Energy Market Analytics & Price Forecasting Engine
+![CI](https://github.com/RoneiCO/european-energy-forecaster/actions/workflows/ci.yml/badge.svg)
 
 ## Overview
 
