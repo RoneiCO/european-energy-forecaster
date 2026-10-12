@@ -38,13 +38,13 @@ def build_ridge_pipeline(alpha: float = 1.0) -> Pipeline:
     )
 
 
-def predict_split(
+def fit_on_split(
     pipeline: Pipeline, df: pl.DataFrame, split: Split, predict_change: bool = False
-) -> tuple[pl.DataFrame, int]:
-    """Fit a fresh copy of `pipeline` on a split's training rows and predict its evaluation rows.
+) -> tuple[Pipeline, pl.DataFrame, int]:
+    """Fit a fresh copy of `pipeline` on a split's training rows.
 
-    Returns one row per evaluation hour (timestamp, zone, actual, yesterday, predicted)
-    and the number of training rows used.
+    Returns the fitted copy, the split's evaluation rows (missing targets and baselines
+    dropped) and the number of training rows used.
     """
     train, evaluation = apply_split(df, split)
     train = train.drop_nulls([TARGET_COLUMN, *HISTORY_COLUMNS])
@@ -56,6 +56,18 @@ def predict_split(
 
     model = clone(pipeline)  # an unfitted copy: nothing carries over between splits
     model.fit(train.select(ALL_FEATURE_COLUMNS).to_pandas(), y_train)
+    return model, evaluation, train.height
+
+
+def predict_split(
+    pipeline: Pipeline, df: pl.DataFrame, split: Split, predict_change: bool = False
+) -> tuple[pl.DataFrame, int]:
+    """Fit on a split's training rows and predict its evaluation rows.
+
+    Returns one row per evaluation hour (timestamp, zone, actual, yesterday, predicted)
+    and the number of training rows used.
+    """
+    model, evaluation, train_rows = fit_on_split(pipeline, df, split, predict_change)
     predicted = model.predict(evaluation.select(ALL_FEATURE_COLUMNS).to_pandas())
     if predict_change:
         predicted = predicted + evaluation[BASELINE_COLUMN].to_numpy()
@@ -66,7 +78,7 @@ def predict_split(
         pl.col(TARGET_COLUMN).alias("actual"),
         pl.col(BASELINE_COLUMN).alias("yesterday"),
     ).with_columns(pl.Series("predicted", predicted))
-    return predictions, train.height
+    return predictions, train_rows
 
 
 def evaluate_pipeline(
