@@ -1,5 +1,6 @@
 import polars as pl
 import pytest
+from polars.testing import assert_frame_equal
 
 from energy_forecaster.config import EUROPEAN_ZONES
 from energy_forecaster.features import FEATURE_TABLE_PATH, load_feature_table
@@ -11,6 +12,7 @@ from energy_forecaster.preprocessing import (
     TARGET_COLUMN,
     build_preprocessor,
 )
+from energy_forecaster.scenarios import apply_scenario
 
 
 @pytest.fixture(scope="module")
@@ -55,3 +57,19 @@ def test_the_base_preprocessor_produces_the_documented_33_columns(
         len(NUMERIC_FEATURES) + len(CYCLICAL_FEATURES) + len(BOOLEAN_FEATURES) + len(EUROPEAN_ZONES)
     )
     assert transformed.shape[1] == expected == 33
+
+
+DERIVED_FEATURES = [
+    "forecast_renewable_mw",
+    "forecast_renewable_share_of_load",
+    "de_forecast_renewable_share_of_load",
+    "system_forecast_renewable_mw",
+    "country_forecast_renewable_mw",
+    "system_load_forecast_mw",
+    "country_load_forecast_mw",
+]
+
+
+def test_a_scenario_of_all_ones_reproduces_the_stored_features(feature_table: pl.DataFrame) -> None:
+    rebuilt = apply_scenario(feature_table)
+    assert_frame_equal(rebuilt.select(DERIVED_FEATURES), feature_table.select(DERIVED_FEATURES))
