@@ -2,14 +2,9 @@ import random
 
 import polars as pl
 
-from energy_forecaster.features import _read_raw_hourly, _total_if_complete
+from energy_forecaster.features import _read_raw_hourly
+from energy_forecaster.scenarios import NORDIC_FORECAST_COLUMNS, recompute_forecast_derived
 
-# Per-zone forecast column -> the matching actual-generation column in the hourly dataset
-NORDIC_FORECAST_COLUMNS = {
-    "forecast_wind_onshore_mw": "Wind Onshore",
-    "forecast_solar_mw": "Solar",
-    "forecast_wind_offshore_mw": "Wind Offshore",
-}
 GERMAN_ACTUAL_COLUMNS = ("Wind Onshore", "Wind Offshore", "Solar")
 
 
@@ -97,26 +92,4 @@ def perturb_forecast_features(
         .clip(lower_bound=0.0)
         .alias("de_forecast_renewable_mw"),
     )
-    return (
-        noisy.with_columns(
-            pl.when(pl.col("forecast_renewable_mw").is_null())
-            .then(None)
-            .otherwise(pl.sum_horizontal(list(NORDIC_FORECAST_COLUMNS)))
-            .alias("forecast_renewable_mw")
-        )
-        .with_columns(
-            (pl.col("forecast_renewable_mw") / pl.col("load_forecast_mw")).alias(
-                "forecast_renewable_share_of_load"
-            ),
-            (pl.col("de_forecast_renewable_mw") / pl.col("de_load_forecast_mw")).alias(
-                "de_forecast_renewable_share_of_load"
-            ),
-            _total_if_complete("forecast_renewable_mw", "timestamp").alias(
-                "system_forecast_renewable_mw"
-            ),
-            _total_if_complete("forecast_renewable_mw", ["timestamp", "country"]).alias(
-                "country_forecast_renewable_mw"
-            ),
-        )
-        .drop([s.name for s in draws.values()])
-    )
+    return recompute_forecast_derived(noisy).drop([s.name for s in draws.values()])
