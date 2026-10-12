@@ -3,7 +3,7 @@ from datetime import UTC, date, datetime
 import polars as pl
 import pytest
 
-from energy_forecaster.dashboard import day_summary, select_day
+from energy_forecaster.dashboard import complete_days, day_summary, select_day
 
 
 def _hourly(start: date, end: date) -> pl.DataFrame:
@@ -43,3 +43,34 @@ def test_day_summary_ignores_rows_with_missing_values():
 def test_day_summary_rejects_all_missing():
     with pytest.raises(ValueError, match="No rows"):
         day_summary([float("nan")], [1.0], [1.0])
+
+
+def test_complete_days_drops_partial_days():
+    def local_hours(start: date, end: date) -> pl.Series:
+        return pl.datetime_range(
+            start, end, "1h", time_zone="Europe/Stockholm", eager=True, closed="left"
+        )
+
+    stamps = pl.concat(
+        [
+            local_hours(
+                date(2024, 3, 30), date(2024, 4, 1)
+            ),  # 30 March: 24 h, 31 March: 23 h (DST)
+            local_hours(date(2024, 4, 1), date(2024, 4, 2)).head(10),  # only 10 hours of 1 April
+        ]
+    )
+    df = pl.DataFrame({"timestamp": stamps}).with_columns(zone=pl.lit("SE_1"))
+    assert complete_days(df) == [date(2024, 3, 30), date(2024, 3, 31)]
+
+
+def test_complete_days_uses_the_local_calendar():
+    stamps = pl.datetime_range(
+        date(2024, 1, 10),
+        date(2024, 1, 11),
+        "1h",
+        time_zone="Europe/Stockholm",
+        eager=True,
+        closed="left",
+    ).dt.convert_time_zone("UTC")
+    df = pl.DataFrame({"timestamp": stamps}).with_columns(zone=pl.lit("SE_1"))
+    assert complete_days(df, min_hours=24) == [date(2024, 1, 10)]
