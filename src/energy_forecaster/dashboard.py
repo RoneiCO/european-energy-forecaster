@@ -35,3 +35,10 @@ def day_summary(actual, yesterday, predicted) -> dict[str, float]:
     mae_model = float(np.mean(np.abs(actual[mask] - predicted[mask])))
     relative = mae_model / mae_yesterday if mae_yesterday > 0 else float("nan")
     return {"mae_yesterday": mae_yesterday, "mae_model": mae_model, "relative_mae": relative}
+
+
+def complete_days(df: pl.DataFrame, min_hours: int = 23) -> list[date]:
+    """Local days with at least `min_hours` distinct hours (23 admits the spring DST day)."""
+    local_date = pl.col("timestamp").dt.convert_time_zone(REFERENCE_TIMEZONE).dt.date()
+    hours = df.group_by(local_date.alias("day")).agg(pl.col("timestamp").n_unique().alias("hours"))
+    return hours.filter(pl.col("hours") >= min_hours).sort("day")["day"].to_list()
