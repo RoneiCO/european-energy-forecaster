@@ -10,7 +10,7 @@ import polars as pl
 import streamlit as st
 
 from energy_forecaster.config import REFERENCE_TIMEZONE
-from energy_forecaster.dashboard import day_summary, predict, select_day
+from energy_forecaster.dashboard import complete_days, day_summary, predict, select_day
 from energy_forecaster.features import load_feature_table
 from energy_forecaster.models import BASELINE_COLUMN
 from energy_forecaster.preprocessing import TARGET_COLUMN
@@ -36,11 +36,10 @@ def load_test_table() -> pl.DataFrame:
 
 model = load_model()
 test = load_test_table()
-local_days = test["timestamp"].dt.convert_time_zone(REFERENCE_TIMEZONE).dt.date()
-
-first_day, last_day = local_days.min(), local_days.max()
-if not isinstance(first_day, date) or not isinstance(last_day, date):
-    raise TypeError("The test table has no valid dates")
+days = complete_days(test)
+if not days:
+    st.error("No complete days in the test table.")
+    st.stop()
 
 st.title("Nordic day-ahead price explorer")
 st.info(
@@ -68,10 +67,12 @@ def theme_is_dark() -> bool:
 with st.sidebar:
     st.header("Pick a day")
     zone = st.selectbox("Bidding zone", sorted(test["zone"].unique().to_list()), index=0)
-    day = st.date_input("Date", value=last_day, min_value=first_day, max_value=last_day)
+    day = st.date_input("Date", value=days[-1], min_value=days[0], max_value=days[-1])
     if not isinstance(day, date):
         st.warning("Pick a single date.")
         st.stop()
+    if day not in days:
+        st.caption(f"{day} has incomplete data, so the metrics use the hours available.")
     st.header("What-if (x the TSO forecast)")
     wind = st.slider("Nordic wind", 0.5, 1.5, 1.0, 0.05)
     solar = st.slider("Nordic solar", 0.5, 1.5, 1.0, 0.05)
@@ -127,6 +128,13 @@ long = view.to_pandas().melt(
 )
 
 colors = PALETTE["dark" if theme_is_dark() else "light"]
+palette = {
+    "Actual": colors["Actual"],
+    "Model": colors["Model"],
+    "What-if": colors["What-if"],
+    "Yesterday": NEUTRAL,
+}
+shown = [name for name in palette if name in series]
 chart = (
     alt.Chart(long)
     .mark_line(strokeWidth=2)
@@ -135,10 +143,7 @@ chart = (
         y=alt.Y("price:Q", title="EUR/MWh"),
         color=alt.Color(
             "Series:N",
-            scale=alt.Scale(
-                domain=["Actual", "Model", "What-if", "Yesterday"],
-                range=[colors["Actual"], colors["Model"], colors["What-if"], NEUTRAL],
-            ),
+            scale=alt.Scale(domain=shown, range=[palette[name] for name in shown]),
             legend=alt.Legend(orient="top", title=None),
         ),
         strokeDash=alt.condition(
@@ -152,7 +157,7 @@ chart = (
     )
     .properties(height=380)
 )
-st.altair_chart(chart, use_container_width=True)
+st.altair_chart(chart, width="stretch")
 
 with st.expander("Show the numbers"):
     st.dataframe(view.drop("zone").with_columns(pl.col(pl.Float64).round(1)), hide_index=True)
