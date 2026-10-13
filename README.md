@@ -2,9 +2,41 @@
 
 ![CI](https://github.com/RoneiCO/european-energy-forecaster/actions/workflows/ci.yml/badge.svg)
 
-## Overview
+**Day-ahead electricity price forecasts for 12 Nordic bidding zones, built on real ENTSO-E grid data, judged on a strict held-out year, and explorable day by day in an interactive backtest dashboard.**
 
-This repository is a work-in-progress, production-grade time-series forecasting pipeline that predicts hourly day-ahead electricity prices (EUR/MWh) across European energy markets. Built for quantitative analysts, energy traders, and grid operators, the engine ingests real grid data (day-ahead prices, load, generation by source, and the grid operators' own day-ahead forecasts of load and wind/solar output) to forecast market-clearing spot prices. The system processes multi-year historical time-series data into an optimized local analytical cache, builds forecast-safe features, trains explainable gradient boosting models, and serves a backtest explorer: an interactive dashboard that replays 2026 days against what actually happened and shows how the model's forecast responds when the grid operators' day-ahead forecasts are rescaled.
+![The Forecast Explorer: one backtested day with the model's forecast, the "yesterday" baseline and a what-if scenario](docs/explorer.png)
+
+## Results at a glance
+
+Scores are relative MAE: the model's mean absolute error divided by that of the naive forecast "same hour yesterday" (1.0 = no better than yesterday, lower is better).
+
+![The Forecast Explorer: allows exploration of different bidding zones, dates, and what-if scenarios](docs/demo.gif)
+
+| Evaluation | Relative MAE | Notes |
+|---|---|---|
+| Cross-validation, 2023-2025 (mean of three folds) | 0.706 | where the model was chosen |
+| **Held-out test, 1 Jan - 7 Oct 2026, scored once** | **0.776** (95% interval 0.737-0.815) | MAE 19.1 against about 24.6 EUR/MWh for the baseline |
+| Same test without the wind/solar forecasts | 0.877 (0.846-0.908) | the lower bracket for the forecast-timing question |
+
+The model beats the baseline in 10 of 12 zones and on 62.5% of zone-days. It is weaker than cross-validation suggested. 2026 was a harder, higher-priced year (mean price 80 against 45 EUR/MWh in 2025), and in two Norwegian zones (NO3, NO5) the model loses to the baseline. Two explanations fit that, and neither has been tested: price levels the model rarely saw, and reservoir levels that no feature describes. Details are in [Modeling & Results](#modeling--results).
+
+## What makes this more than a model in a notebook
+
+- **No leakage by construction.** Every feature is something that existed before the 12:00 day-ahead auction close. Tests assert that no same-hour actual is a feature and that every price lag is at least 24 hours.
+- **Honest evaluation.** Expanding-year cross-validation, predictions and adoption rules written down before each experiment, the 2026 test set scored once with nothing changed afterwards, and bootstrap intervals over whole days because hourly errors within a day are correlated.
+- **Tested, and the tests are tested.** 54 tests; the important ones were verified by deliberately breaking the code and watching the right test fail (see [Testing & Quality](#testing--quality)).
+- **Reproducible engineering.** GitHub Actions CI, pre-commit hooks, and Docker images for the tests and for the dashboard, built so the API token never enters an image.
+- **A dashboard that states its limits.** It replays only days the model never trained on, and its what-if sliders show the model's response, not a market simulation (see [the dashboard](#dashboard-the-forecast-explorer)).
+
+## Looking at it, and running it
+
+The data comes from ENTSO-E and needs a free API token, so it is not included in this repository. The screenshot and demo above show the dashboard without running anything. To reproduce everything, follow [Reproducing This Project](#reproducing-this-project): a handful of commands plus a data pull that takes a while the first time.
+
+This project contains data from the ENTSO-E Transparency Platform. None of that data is redistributed here.
+
+## Scope
+
+The pipeline ingests day-ahead prices, actual load and generation by source, and the grid operators' own day-ahead forecasts of load and wind/solar output. It stores them as Parquet queried through DuckDB, builds forecast-safe features with Polars, trains gradient-boosted models with scikit-learn and XGBoost, and serves a Streamlit explorer for backtested days.
 
 ## Data Sources
 
@@ -163,7 +195,6 @@ Across all zone-days the model beats "yesterday" 62.5% of the time. A single day
 
 ## Dashboard: the Forecast Explorer
 
-![Forecast Explorer](docs/explorer.png)
 
 A Streamlit app (`app/streamlit_app.py`) that replays any complete day of the 2026 test period for any of the 12 zones.
 
@@ -236,7 +267,7 @@ pip install -e ".[dev]"
 
 ### 4. Configure your ENTSO-E API token
 
-Register for API access at the [ENTSO-E Transparency Platform](https://transparency.entsoe.eu/) (approval typically takes a few business days), then create a `.env` file in the project root:
+Create an account on the [ENTSO-E Transparency Platform](https://transparency.entsoe.eu/), request API access by email (approval typically takes a few business days), and generate your token in your account settings, then create a `.env` file in the project root:
 
 ```
 ENTSOE_API_KEY=your_token_here
@@ -319,4 +350,7 @@ Publishing the port on `127.0.0.1` keeps the app reachable from this machine onl
 - [x] Phase 3: Model training & evaluation
 - [x] Phase 4: Testing, CI/CD, Docker
 - [x] Phase 5: Streamlit forecast explorer with what-if sliders, run locally and in Docker
-- [ ] Hosted deployment (optional; needs the forecast-vintage question settled first)
+
+## License
+
+The code is released under the [GNU GPL License](LICENSE). The ENTSO-E data it processes is not part of this repository and remains subject to ENTSO-E's own terms.
