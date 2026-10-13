@@ -4,7 +4,7 @@
 
 ## Overview
 
-This repository is a work-in-progress, production-grade time-series forecasting pipeline that predicts hourly day-ahead electricity prices (EUR/MWh) across European energy markets. Built for quantitative analysts, energy traders, and grid operators, the engine ingests real grid data (day-ahead prices, load, generation by source, and the grid operators' own day-ahead forecasts of load and wind/solar output) to forecast market-clearing spot prices. The system processes multi-year historical time-series data into an optimized local analytical cache, builds forecast-safe features, trains explainable gradient boosting models, and serves predictions through an interactive scenario-simulation dashboard.
+This repository is a work-in-progress, production-grade time-series forecasting pipeline that predicts hourly day-ahead electricity prices (EUR/MWh) across European energy markets. Built for quantitative analysts, energy traders, and grid operators, the engine ingests real grid data (day-ahead prices, load, generation by source, and the grid operators' own day-ahead forecasts of load and wind/solar output) to forecast market-clearing spot prices. The system processes multi-year historical time-series data into an optimized local analytical cache, builds forecast-safe features, trains explainable gradient boosting models, and serves a backtest explorer: an interactive dashboard that replays 2026 days against what actually happened and shows how the model's forecast responds when the grid operators' day-ahead forecasts are rescaled.
 
 ## Data Sources
 
@@ -51,6 +51,9 @@ Zones, their countries and their time zones live in one place, `src/energy_forec
 - **Relative MAE against a "yesterday" baseline as the headline metric** → The baseline is the price of the same hour 24 hours earlier, the strongest of several naive baselines tried. 1.0 means "no better than yesterday". RMSE is reported alongside, because a few spikes dominate it.
 - **Pre-registered predictions and adoption rules** → Each experiment had its expected result and its adoption rule written down before it was run, so the outcome could not bend the decision. Misses are reported with the hits.
 - **Day-level bootstrap intervals** → Hourly errors within a day are strongly correlated, so uncertainty is estimated by resampling whole days.
+- **A backtest explorer, not a live forecaster** → The dashboard only offers 2026 days, which the model never trained on, so every day shown is genuinely out-of-sample. A live version would first need the wind/solar forecast vintage question below settled.
+- **What-if by rescaling the day-ahead forecasts, with every derived feature rebuilt** → Scaling a base forecast and leaving its totals and shares stale would feed the model a contradictory day. One shared function recomputes all derived columns, and a test checks that it reproduces the stored table when nothing is scaled.
+- **Pooled scores, not per-day ratios** → A single day's relative MAE explodes when the baseline happens to do well, so the headline and the dashboard's zone context pool the errors over all days.
 
 ## Data Quality Issues Found & Resolved
 
@@ -132,12 +135,73 @@ Intervals are 95% bootstrap intervals over whole days. The model beats the basel
 
 SHAP values (model fitted on 2021–2024, explained on 2025) show that price history carries about 46% of the attribution (the previous day's price alone, 28%), the wind, solar and load forecasts about 40%, and the German features 13% combined. Calendar features are used little, because the daily shape is already in the previous day's price.
 
+### Zone and day level
+
+| Zone | Relative MAE (pooled, 2026) | Days the model beat "yesterday" |
+|---|---|---|
+| FI | 0.64 | 74% |
+| SE_2 | 0.64 | 74% |
+| SE_1 | 0.65 | 76% |
+| SE_3 | 0.70 | 71% |
+| SE_4 | 0.73 | 70% |
+| DK_1 | 0.77 | 65% |
+| NO_4 | 0.79 | 66% |
+| DK_2 | 0.79 | 63% |
+| NO_1 | 0.87 | 55% |
+| NO_2 | 0.88 | 54% |
+| NO_3 | 1.09 | 42% |
+| NO_5 | 1.09 | 41% |
+
+Across all zone-days the model beats "yesterday" 62.5% of the time. A single day's ratio is much noisier than the pooled one: in DK_1, five consecutive days came out at 1.00, 1.81, 3.95, 0.77 and 1.55 against a pooled 0.77. The 3.95 day had a baseline error of 7.1 against a perfectly ordinary model error of 28.1. Judged over its last 14 days (7 won, against about 9 expected), DK_1 shows no evidence of drift.
+
 ### Limitations
 
 - **Forecast vintage.** The stored wind/solar forecasts carry no publication time, and the regulation guarantees them only by 18:00 on D-1, after the auction closes. Removing them gives a lower bracket (0.929 in cross-validation, 0.877 on the test year). Independent noise at the size of the German forecast error costs only about 0.01, so the model relies on the forecast's level more than its precision. Errors correlated across zones were not tested.
 - **One test year**, and an unusual one. The interval reflects which days happened to be sampled, not a change of regime.
 - **Reservoir levels are not features.** The hydro-dominated Norwegian zones are the weakest.
 - **Selection effects.** Features were chosen on the same three folds used to report cross-validation scores, so 0.706 is somewhat optimistic by construction.
+
+## Dashboard: the Forecast Explorer
+
+![Forecast Explorer](docs/explorer.png)
+
+A Streamlit app (`app/streamlit_app.py`) that replays any complete day of the 2026 test period for any of the 12 zones.
+
+- **The chart** shows the actual price, the model's forecast and the "yesterday" baseline, with a table of the numbers underneath. Hours are on the Stockholm clock.
+- **The numbers** give the day's MAE for the baseline and the model, the day's relative MAE, and, for the chosen zone, the 2026 pooled relative MAE and the share of days the model beat "yesterday". A zone where the model loses to the baseline over 2026 gets a visible warning.
+- **Four what-if sliders** rescale the day-ahead forecasts of Nordic wind, Nordic solar, Nordic load (0.8 to 1.2 times) and German wind and solar. Every derived feature is rebuilt before the model predicts again, and a second line appears on the chart.
+
+How the model's forecast responds to the sliders (mean change over the 2026 test rows, EUR/MWh, averaged over the zones):
+
+| Driver | x0.5 | x1.5 |
+|---|---|---|
+| Wind | +13.2 | -11.4 |
+| Solar | +1.5 | -1.4 |
+| German wind + solar | +10.0 | -7.7 |
+
+Load moves the forecast by -8.7 at 0.75 times and +8.9 at 1.25 times. Every response is monotone, in every zone, and every sign is economically right. Wind matters most in SE_3, SE_4, Denmark and Finland, and least in NO_4 and NO_5; German renewables matter most in Denmark.
+
+**Read the sliders with care.**
+- They show **the model's response**, not a market simulation. Yesterday's prices stay fixed, which damps the response, and the model has not seen days where wind or load differ from their forecasts by half.
+- Finland's load response is convex (+34 at 1.5 times) and partly extrapolation, which is why the load slider stops at 1.2.
+- A single day's relative MAE is noisy (see above); the zone caption is there for context.
+
+The colours were checked with a palette validator in light and dark themes (an early near-black line had a contrast of 1.09 to 1 on the dark theme and was replaced).
+
+## Testing & Quality
+
+The test suite has 54 tests:
+
+- **Unit tests** for the metrics, the day-level bootstrap and the train/test splits (including the New Year boundary on the local calendar).
+- **Synthetic-data tests** that turn the bugs found in Phases 1 and 2 into permanent checks: lags computed inside each zone, calendar features on each zone's own clock, Swedish Sundays not counted as holidays, long zero-forecast runs treated as missing, price requests kept short of a full year, the gap guard, duplicate and tuple-shaped generation columns, and timestamps across daylight saving time.
+- **Leakage guards**: no same-hour actual is a model feature, and every price lag is at least 24 hours.
+- **Data-contract tests** on the real feature table (one row per zone and hour, the 24-hour lag is really 24 hours earlier, the preprocessor yields 33 columns). They skip themselves when the table has not been built.
+- **Scenario tests**: scaling by 1.0 reproduces the stored table, derived totals follow the scaled columns, missing values propagate, and negative factors are rejected.
+- **Dashboard-helper tests**: day selection on the Stockholm calendar (including the 23- and 25-hour daylight-saving days), complete-day detection, the day summary with missing values, and the zone context (pooled ratio, win rate, ties not counted as wins).
+
+Each test was checked by breaking the code on purpose and confirming the right test failed. One mutation survived a first version of a test (the timestamps were already in the right time zone), so the test was rebuilt with UTC timestamps until the mutation was caught. In CI, where the data-contract tests skip, the result is 48 passed and 6 skipped, with about 50% coverage overall: 100% on config, metrics, scenarios, splits and the bootstrap, 83% on the dashboard helpers (the part that needs a fitted model is untested), 57% on feature engineering and 40% on ingestion. The model training and evaluation code is exercised by the scripts rather than by unit tests.
+
+**Automation:** Ruff (lint and format), a pytest hook and basic file hygiene checks run on every commit through `pre-commit`; the same lint, format and test steps run on GitHub Actions for every push and pull request. No secrets are needed in CI, because no test calls the API.
 
 ## Known Data Gaps
 
@@ -196,6 +260,9 @@ python scripts/evaluate_models.py      # the model ladder on the cross-validatio
 python scripts/tune_xgboost.py         # random search (long: about 39 model fits)
 python scripts/final_test.py           # the 2026 test, run once
 python scripts/explain_model.py        # SHAP importance
+python scripts/daily_view.py           # zone- and day-level view of the test predictions
+python scripts/train_final_model.py    # saves models/xgb_full.joblib for the dashboard
+python scripts/scenario_response.py   # how the forecast responds to the what-if levers
 ```
 
 - `data/raw/` — one Parquet file per data type and year.
@@ -205,12 +272,25 @@ python scripts/explain_model.py        # SHAP importance
 ### 6. Run the tests
 
 ```bash
-pytest                                   # 38 passed with the data built, 5 skipped without it
+pytest                                   # 54 passed with the data built; 48 passed and 6 skipped without it
 pytest --cov=energy_forecaster --cov-report=term-missing
 pre-commit install                       # run the checks on every commit
 ```
 
-### 7. Or use Docker
+### 7. Run the dashboard
+
+The dashboard needs the built feature table, the saved test predictions and the saved model (`models/` is not in the repository, so train it once):
+
+```bash
+python scripts/final_test.py             # if the test predictions do not exist yet
+python scripts/train_final_model.py      # writes models/xgb_full.joblib and model_card.json
+pip install -e ".[app]"
+streamlit run app/streamlit_app.py       # http://localhost:8501
+```
+
+A joblib file can run code when loaded, and it is tied to the library versions that wrote it (the model card records them). Only load a model you trained yourself.
+
+### 8. Or use Docker
 
 ```bash
 docker build -t energy-forecaster .
@@ -222,10 +302,21 @@ docker run --rm --env-file .env -v "$PWD/data:/app/data" energy-forecaster \
 
 The ENTSO-E token is never copied into the image (`.env` is in `.dockerignore`).
 
+The dashboard has its own image. It contains no data, model or token; those are mounted read-only at run time:
+
+```bash
+docker build -f Dockerfile.app -t energy-explorer .
+docker run --rm -p 127.0.0.1:8501:8501 \
+  -v "$PWD/data:/app/data:ro" -v "$PWD/models:/app/models:ro" energy-explorer
+```
+
+Publishing the port on `127.0.0.1` keeps the app reachable from this machine only. Without the mounts, the page shows a `FileNotFoundError` for the model.
+
 ## Project Status
 
 - [x] Phase 1: Data ingestion, DuckDB warehouse layer, hourly modeling dataset
 - [x] Phase 2: Feature engineering and leakage-free preprocessing pipeline
 - [x] Phase 3: Model training & evaluation
 - [x] Phase 4: Testing, CI/CD, Docker
-- [ ] Phase 5: Streamlit dashboard & deployment
+- [x] Phase 5: Streamlit forecast explorer with what-if sliders, run locally and in Docker
+- [ ] Hosted deployment (optional; needs the forecast-vintage question settled first)
