@@ -3,7 +3,7 @@ from datetime import UTC, date, datetime
 import polars as pl
 import pytest
 
-from energy_forecaster.dashboard import complete_days, day_summary, select_day
+from energy_forecaster.dashboard import complete_days, day_summary, select_day, zone_context
 
 
 def _hourly(start: date, end: date) -> pl.DataFrame:
@@ -74,3 +74,36 @@ def test_complete_days_uses_the_local_calendar():
     ).dt.convert_time_zone("UTC")
     df = pl.DataFrame({"timestamp": stamps}).with_columns(zone=pl.lit("SE_1"))
     assert complete_days(df, min_hours=24) == [date(2024, 1, 10)]
+
+
+def _rows(zone: str, day: int, actual, predicted, yesterday) -> pl.DataFrame:
+    stamps = [datetime(2024, 1, day, hour, tzinfo=UTC) for hour in (12, 13)]
+    return pl.DataFrame(
+        {
+            "timestamp": stamps,
+            "zone": [zone] * 2,
+            "actual": actual,
+            "predicted": predicted,
+            "yesterday": yesterday,
+        }
+    )
+
+
+def test_zone_context_pools_errors_and_counts_days():
+    predictions = pl.concat(
+        [
+            _rows("A", 10, [200, 200], [190, 210], [100, 300]),  # model 20 vs baseline 200: a win
+            _rows("A", 11, [100, 100], [70, 130], [80, 120]),  # model 60 vs baseline 40: a loss
+            _rows("A", 12, [100, 100], [90, 110], [90, 110]),  # 20 vs 20: a tie, not a win
+            _rows("B", 10, [0, 0], [1000, 1000], [0, 0]),  # another zone, must be ignored
+        ]
+    )
+    result = zone_context(predictions, "A")
+    assert result["pooled_relative_mae"] == pytest.approx(100 / 260)
+    assert result["win_rate"] == pytest.approx(1 / 3)
+    assert result["days"] == 3
+
+
+def test_zone_context_rejects_unknown_zone():
+    with pytest.raises(ValueError, match="No predictions"):
+        zone_context(_rows("A", 10, [1, 1], [1, 1], [1, 1]), "Z")

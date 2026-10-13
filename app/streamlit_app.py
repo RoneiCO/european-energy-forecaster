@@ -10,7 +10,13 @@ import polars as pl
 import streamlit as st
 
 from energy_forecaster.config import REFERENCE_TIMEZONE
-from energy_forecaster.dashboard import complete_days, day_summary, predict, select_day
+from energy_forecaster.dashboard import (
+    complete_days,
+    day_summary,
+    predict,
+    select_day,
+    zone_context,
+)
 from energy_forecaster.features import load_feature_table
 from energy_forecaster.models import BASELINE_COLUMN
 from energy_forecaster.preprocessing import TARGET_COLUMN
@@ -18,7 +24,6 @@ from energy_forecaster.scenarios import apply_scenario
 from energy_forecaster.splits import TEST_SPLIT, apply_split
 
 MODEL_PATH = Path(__file__).resolve().parents[1] / "models" / "xgb_full.joblib"
-WEAK_ZONES = {"NO_3", "NO_5"}
 
 st.set_page_config(page_title="Nordic day-ahead price explorer", layout="wide")
 
@@ -32,6 +37,17 @@ def load_model():
 def load_test_table() -> pl.DataFrame:
     _, test = apply_split(load_feature_table(), TEST_SPLIT)
     return test
+
+
+@st.cache_data
+def load_context_table() -> pl.DataFrame:
+    rows = load_test_table().drop_nulls([TARGET_COLUMN, BASELINE_COLUMN])
+    return rows.select(
+        "timestamp",
+        "zone",
+        pl.col(TARGET_COLUMN).alias("actual"),
+        pl.col(BASELINE_COLUMN).alias("yesterday"),
+    ).with_columns(pl.Series("predicted", predict(load_model(), rows)))
 
 
 model = load_model()
@@ -67,6 +83,8 @@ def theme_is_dark() -> bool:
 with st.sidebar:
     st.header("Pick a day")
     zone = st.selectbox("Bidding zone", sorted(test["zone"].unique().to_list()), index=0)
+    if zone is None:
+        st.stop()
     day = st.date_input("Date", value=days[-1], min_value=days[0], max_value=days[-1])
     if not isinstance(day, date):
         st.warning("Pick a single date.")
@@ -102,10 +120,13 @@ view = (
     .filter(pl.col("zone") == zone)
 )
 
-if zone in WEAK_ZONES:
-    st.warning(
-        f"{zone} is one of the zones where the model loses to the 'yesterday' baseline over 2026."
-    )
+context = zone_context(load_context_table(), zone)
+if context["pooled_relative_mae"] > 1:
+    st.warning(f"{zone} is a zone where the model loses to the 'yesterday' baseline over 2026.")
+st.caption(
+    f"{zone} over {int(context['days'])} test days: the model's error is {context['pooled_relative_mae']:.2f}x "
+    f"yesterday's, and it beats 'yesterday' on {context['win_rate']:.0%} of days."
+)
 
 summary = day_summary(view["Actual"], view["Yesterday"], view["Model"])
 shift = float(np.mean(view["What-if"].to_numpy() - view["Model"].to_numpy()))

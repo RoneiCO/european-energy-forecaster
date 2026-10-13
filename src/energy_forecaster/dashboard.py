@@ -42,3 +42,26 @@ def complete_days(df: pl.DataFrame, min_hours: int = 23) -> list[date]:
     local_date = pl.col("timestamp").dt.convert_time_zone(REFERENCE_TIMEZONE).dt.date()
     hours = df.group_by(local_date.alias("day")).agg(pl.col("timestamp").n_unique().alias("hours"))
     return hours.filter(pl.col("hours") >= min_hours).sort("day")["day"].to_list()
+
+
+def zone_context(predictions: pl.DataFrame, zone: str) -> dict[str, float]:
+    """Pooled relative MAE and the share of days the model beat 'yesterday', for one zone.
+
+    `predictions` needs columns timestamp, zone, actual, predicted, yesterday.
+    """
+    local_date = pl.col("timestamp").dt.convert_time_zone(REFERENCE_TIMEZONE).dt.date()
+    rows = predictions.filter(pl.col("zone") == zone).with_columns(
+        day=local_date,
+        model_err=(pl.col("actual") - pl.col("predicted")).abs(),
+        base_err=(pl.col("actual") - pl.col("yesterday")).abs(),
+    )
+    if rows.is_empty():
+        raise ValueError(f"No predictions for zone {zone}")
+    daily = rows.group_by("day").agg(pl.col("model_err").mean(), pl.col("base_err").mean())
+    return {
+        "pooled_relative_mae": rows.select(
+            pl.col("model_err").sum() / pl.col("base_err").sum()
+        ).item(),
+        "win_rate": daily.select((pl.col("model_err") < pl.col("base_err")).mean()).item(),
+        "days": float(daily.height),
+    }
